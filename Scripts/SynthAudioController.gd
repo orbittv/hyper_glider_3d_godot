@@ -210,3 +210,16 @@ func play_laser_hum() -> void:
 
 func play_missile_launch() -> void:
 	_play_sfx(_stream_missile_launch, randf_range(0.95, 1.06), 0.88)
+
+
+func play_enemy_fire() -> void:
+	_play_sfx(_stream_bullet_fire, randf_range(0.48, 0.58), 0.50)
+
+
+func play_boss_warning() -> void:
+	_play_sfx(_stream_shield_hit, 0.62, 0.95)
+
+
+func play_boss_explode() -> void:
+	_play_sfx(_stream_asteroid_explode, 0.56, 1.0)
+	_play_sfx(_stream_hyperjump, 0.82, 0.95)

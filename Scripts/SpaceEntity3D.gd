@@ -18,7 +18,9 @@ enum Kind {
 	ORB_WEAPON_VULCAN,
 	ORB_WEAPON_LASER,
 	ORB_WEAPON_MISSILE,
-	BLACK_HOLE_PORTAL
+	BLACK_HOLE_PORTAL,
+	ENEMY_INTERCEPTOR,
+	ENEMY_BOSS_3D
 }
 
 var kind: Kind = Kind.METEOR_ROCK
@@ -31,6 +33,12 @@ var rot_speed: Vector3 = Vector3(1.0, 1.4, 0.7)
 var grazed: bool = false
 var is_destroyed: bool = false
 var age: float = 0.0
+var boss_title: String = ""
+var boss_enraged: bool = false
+var fire_cooldown: float = 1.4
+var fire_interval: float = 1.6
+var spawn_origin_xy: Vector2 = Vector2.ZERO
+var attack_counter: int = 0
 
 var _visual_root: Node3D
 var _rock_mesh_inst: MeshInstance3D
@@ -49,12 +57,17 @@ static var _mat_plasma_green_core: StandardMaterial3D
 static var _mat_plasma_gold_core: StandardMaterial3D
 static var _mat_black_hole_void: StandardMaterial3D
 static var _mat_black_hole_disk: ShaderMaterial
+static var _mat_enemy_hull: StandardMaterial3D
+static var _mat_enemy_neon: StandardMaterial3D
+static var _mat_boss_core: StandardMaterial3D
 static var _orb_materials: Dictionary = {}
 
 static var _orb_sphere_mesh: SphereMesh
 static var _orb_ring_mesh: TorusMesh
 static var _bh_void_mesh: SphereMesh
 static var _bh_disk_mesh: QuadMesh
+static var _enemy_body_mesh: BoxMesh
+static var _enemy_wing_mesh: BoxMesh
 
 const WEAPON_ORB_KINDS: Array[Kind] = [
 	Kind.ORB_WEAPON_PLASMA,
@@ -79,10 +92,15 @@ static func clear_static_caches() -> void:
 	_mat_plasma_gold_core = null
 	_mat_black_hole_void = null
 	_mat_black_hole_disk = null
+	_mat_enemy_hull = null
+	_mat_enemy_neon = null
+	_mat_boss_core = null
 	_orb_sphere_mesh = null
 	_orb_ring_mesh = null
 	_bh_void_mesh = null
 	_bh_disk_mesh = null
+	_enemy_body_mesh = null
+	_enemy_wing_mesh = null
 
 
 static func _ensure_shared_assets() -> void:
@@ -155,6 +173,27 @@ static func _ensure_shared_assets() -> void:
 
 	_bh_disk_mesh = QuadMesh.new()
 	_bh_disk_mesh.size = Vector2(15.5, 15.5)
+
+	_enemy_body_mesh = BoxMesh.new()
+	_enemy_body_mesh.size = Vector3(1.1, 0.45, 2.2)
+
+	_enemy_wing_mesh = BoxMesh.new()
+	_enemy_wing_mesh.size = Vector3(3.1, 0.12, 0.95)
+
+	_mat_enemy_hull = StandardMaterial3D.new()
+	_mat_enemy_hull.albedo_color = Color(0.18, 0.08, 0.16)
+	_mat_enemy_hull.metallic = 0.82
+	_mat_enemy_hull.roughness = 0.25
+
+	_mat_enemy_neon = StandardMaterial3D.new()
+	_mat_enemy_neon.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_mat_enemy_neon.albedo_color = Color(1.0, 0.22, 0.45)
+
+	_mat_boss_core = StandardMaterial3D.new()
+	_mat_boss_core.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_mat_boss_core.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_mat_boss_core.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	_mat_boss_core.albedo_color = Color(1.0, 0.26, 0.52, 0.90)
 
 	var orb_colors: Dictionary = {
 		Kind.ORB_ENERGY: Color(0.20, 0.92, 1.0, 0.95),
@@ -305,6 +344,27 @@ func setup_entity(
 			velocity = Vector3(0.0, 0.0, forward_vel_z * 0.78)
 			score_value = 500
 			_build_black_hole_visual()
+		Kind.ENEMY_INTERCEPTOR:
+			radius = 1.65
+			max_hp = 52.0 * hp_wave_mult
+			hp = max_hp
+			score_value = 190
+			spawn_origin_xy = Vector2(start_pos.x, start_pos.y)
+			velocity = Vector3(0.0, 0.0, forward_vel_z * 0.76)
+			fire_interval = maxf(0.95, 1.75 - float(wave_num) * 0.06)
+			fire_cooldown = randf_range(0.55, 1.15)
+			_build_interceptor_visual()
+		Kind.ENEMY_BOSS_3D:
+			radius = 3.85
+			max_hp = (460.0 + float(wave_num) * 110.0)
+			hp = max_hp
+			score_value = 1200
+			boss_title = "ДРЕДНОУТ «ЯДРО ОМЕГА-3D»" if (wave_num % 6 == 0) else "КРЕЙСЕР «ТИТАН-3D»"
+			spawn_origin_xy = Vector2(0.0, 1.2)
+			velocity = Vector3(0.0, 0.0, forward_vel_z * 0.85)
+			fire_interval = 1.45
+			fire_cooldown = 1.2
+			_build_boss_3d_visual()
 		_:
 			radius = 1.15
 			velocity = Vector3(0.0, 0.0, forward_vel_z * 0.88)
@@ -382,6 +442,61 @@ func _build_black_hole_visual() -> void:
 	_visual_root.add_child(_ring_inst)
 
 
+func _build_interceptor_visual() -> void:
+	_base_rock_mat = _mat_enemy_hull
+	_rock_mesh_inst = MeshInstance3D.new()
+	_rock_mesh_inst.mesh = _enemy_body_mesh
+	_rock_mesh_inst.material_override = _mat_enemy_hull
+	_visual_root.add_child(_rock_mesh_inst)
+
+	var wings := MeshInstance3D.new()
+	wings.mesh = _enemy_wing_mesh
+	wings.material_override = _mat_enemy_hull
+	wings.position = Vector3(0.0, 0.0, -0.2)
+	_visual_root.add_child(wings)
+
+	var neon_bar := MeshInstance3D.new()
+	neon_bar.mesh = _enemy_wing_mesh
+	neon_bar.material_override = _mat_enemy_neon
+	neon_bar.scale = Vector3(0.96, 0.45, 0.22)
+	neon_bar.position = Vector3(0.0, 0.05, 0.32)
+	_visual_root.add_child(neon_bar)
+
+	_plasma_core_inst = MeshInstance3D.new()
+	_plasma_core_inst.mesh = _orb_sphere_mesh
+	_plasma_core_inst.material_override = _mat_boss_core
+	_plasma_core_inst.scale = Vector3.ONE * 0.85
+	_plasma_core_inst.position = Vector3(0.0, 0.14, 0.25)
+	_visual_root.add_child(_plasma_core_inst)
+
+
+func _build_boss_3d_visual() -> void:
+	_base_rock_mat = _mat_enemy_hull
+	_rock_mesh_inst = MeshInstance3D.new()
+	_rock_mesh_inst.mesh = _enemy_body_mesh
+	_rock_mesh_inst.material_override = _mat_enemy_hull
+	_rock_mesh_inst.scale = Vector3(3.2, 2.4, 2.6)
+	_visual_root.add_child(_rock_mesh_inst)
+
+	var boss_wings := MeshInstance3D.new()
+	boss_wings.mesh = _enemy_wing_mesh
+	boss_wings.material_override = _mat_enemy_hull
+	boss_wings.scale = Vector3(2.5, 2.2, 2.2)
+	_visual_root.add_child(boss_wings)
+
+	_plasma_core_inst = MeshInstance3D.new()
+	_plasma_core_inst.mesh = _orb_sphere_mesh
+	_plasma_core_inst.material_override = _mat_boss_core
+	_plasma_core_inst.scale = Vector3.ONE * 2.8
+	_visual_root.add_child(_plasma_core_inst)
+
+	_ring_inst = MeshInstance3D.new()
+	_ring_inst.mesh = _orb_ring_mesh
+	_ring_inst.material_override = _mat_enemy_neon
+	_ring_inst.scale = Vector3.ONE * 4.2
+	_visual_root.add_child(_ring_inst)
+
+
 func is_meteor() -> bool:
 	return (
 		kind == Kind.METEOR_ROCK
@@ -389,6 +504,14 @@ func is_meteor() -> bool:
 		or kind == Kind.METEOR_PLASMA_GOLD
 		or kind == Kind.METEOR_CRYSTAL
 	)
+
+
+func is_enemy_ship() -> bool:
+	return kind == Kind.ENEMY_INTERCEPTOR or kind == Kind.ENEMY_BOSS_3D
+
+
+func is_hostile() -> bool:
+	return is_meteor() or is_enemy_ship()
 
 
 func is_plasma_bomb() -> bool:
@@ -408,12 +531,15 @@ func is_pickup_orb() -> bool:
 
 
 func apply_damage(amount: float) -> bool:
-	if is_destroyed or not is_meteor():
+	if is_destroyed or not is_hostile():
 		return false
 	hp -= amount
 	_hit_flash_timer = 0.07
 	if _rock_mesh_inst != null and _mat_hit_flash != null:
 		_rock_mesh_inst.material_override = _mat_hit_flash
+	if kind == Kind.ENEMY_BOSS_3D and not boss_enraged and hp > 0.0 and hp <= max_hp * 0.45:
+		boss_enraged = true
+		fire_interval = 0.92
 	if hp <= 0.0:
 		is_destroyed = true
 		return true
@@ -441,6 +567,29 @@ func update_entity(delta: float, speed_mult: float, glider_pos: Vector3, magnet_
 		position.z += velocity.z * speed_mult * delta
 		if _ring_inst != null:
 			_ring_inst.rotation.z -= delta * 1.8
+		return position.z < 18.0
+
+	# Поведение тяжёлого 3D Босса-Дредноута (выходит на боевую дистанцию z = -34 и маневрирует по восьмёрке)
+	if kind == Kind.ENEMY_BOSS_3D:
+		if position.z < -34.0:
+			position.z = minf(-34.0, position.z + velocity.z * speed_mult * delta)
+		var spd: float = 1.65 if boss_enraged else 1.05
+		position.x = sin(age * spd) * 4.8
+		position.y = 1.1 + sin(age * spd * 1.7) * 2.2
+		if _ring_inst != null:
+			_ring_inst.rotation.z += delta * (3.8 if boss_enraged else 1.9)
+			_ring_inst.rotation.x = sin(age * 2.0) * 0.55
+		if _visual_root != null:
+			_visual_root.rotation.z = -cos(age * spd) * 0.18
+		return true
+
+	# Поведение 3D Катера-Перехватчика (маневрирует по синусоиде навстречу глайдеру)
+	if kind == Kind.ENEMY_INTERCEPTOR:
+		position.z += velocity.z * speed_mult * delta
+		position.x = clampf(spawn_origin_xy.x + sin(age * 2.8 + spawn_origin_xy.y) * 2.8, -7.2, 7.2)
+		position.y = clampf(spawn_origin_xy.y + cos(age * 2.1) * 1.4, -4.2, 4.8)
+		if _visual_root != null:
+			_visual_root.rotation.z = -cos(age * 2.8 + spawn_origin_xy.y) * 0.35
 		return position.z < 18.0
 
 	position.x += velocity.x * delta

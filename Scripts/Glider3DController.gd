@@ -526,6 +526,24 @@ func update_glider(
 		_drone_right.rotation.y -= delta * 2.6
 
 
+func update_target_lock(has_target: bool, target_world_pos: Vector3, delta: float) -> void:
+	if _reticle_far == null or _reticle_mat == null or _hull_root == null:
+		return
+	var lerp_t: float = clampf(delta * 10.0, 0.0, 1.0)
+	if has_target:
+		var local_t: Vector3 = _hull_root.to_local(target_world_pos)
+		var clamped_x: float = clampf(local_t.x * 0.45, -3.5, 3.5)
+		var clamped_y: float = clampf(local_t.y * 0.45, -2.5, 2.5)
+		_reticle_far.position = _reticle_far.position.lerp(Vector3(clamped_x, clamped_y, -26.0), lerp_t)
+		var pulse_s: float = 1.0 + 0.12 * sin(_time_accum * 14.0)
+		_reticle_far.scale = Vector3.ONE * pulse_s
+		_reticle_mat.albedo_color = Color(0.28, 1.0, 0.58, 0.62)
+	else:
+		_reticle_far.position = _reticle_far.position.lerp(Vector3(0.0, 0.0, -28.0), lerp_t)
+		_reticle_far.scale = Vector3.ONE
+		_reticle_mat.albedo_color = Color(0.22, 0.96, 1.0, 0.38)
+
+
 func show_quantum_laser(target_world_pos: Vector3) -> void:
 	if _laser_beam_mesh == null:
 		return

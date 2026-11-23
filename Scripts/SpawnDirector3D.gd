@@ -50,17 +50,19 @@ func update_spawning(
 		if randf() < 0.38:
 			_spawn_random_meteor(entities_root, wave_num, forward_speed, SPAWN_Z - randf_range(8.0, 16.0))
 
-	# 2. Фигурные 3D-паттерны (кольцо астероидов, диагональная гряда, плазменная ловушка)
+	# 2. Фигурные 3D-паттерны (кольцо астероидов, диагональная гряда, плазменная ловушка, звено 3D-перехватчиков)
 	_pattern_timer -= delta
 	if _pattern_timer <= 0.0:
-		_pattern_timer = randf_range(5.4, 8.2) / clampf(intensity, 1.0, 1.7)
-		var pat: int = randi() % 3
+		_pattern_timer = randf_range(5.2, 7.8) / clampf(intensity, 1.0, 1.7)
+		var pat: int = randi() % 4
 		if pat == 0:
 			_spawn_meteor_ring_gate(entities_root, wave_num, forward_speed)
 		elif pat == 1:
 			_spawn_diagonal_asteroid_wall(entities_root, wave_num, forward_speed)
-		else:
+		elif pat == 2:
 			_spawn_plasma_cluster(entities_root, wave_num, forward_speed)
+		else:
+			_spawn_interceptor_squadron(entities_root, wave_num, forward_speed)
 
 	# 3. Энергетические сферы и капсулы вооружения
 	_orb_timer -= delta
@@ -96,7 +98,10 @@ func _spawn_random_meteor(entities_root: Node3D, wave_num: int, forward_speed: f
 	elif roll < 0.34:
 		kind = SpaceEntity3D.Kind.METEOR_CRYSTAL
 		rad = randf_range(1.35, 1.95)
-	elif roll > 0.86:
+	elif roll < 0.48:
+		kind = SpaceEntity3D.Kind.ENEMY_INTERCEPTOR
+		rad = 1.65
+	elif roll > 0.88:
 		# Гигантский валун
 		rad = randf_range(2.55, 3.35)
 
@@ -163,6 +168,32 @@ func _spawn_plasma_cluster(entities_root: Node3D, wave_num: int, forward_speed: 
 			1.35,
 			wave_num
 		)
+
+
+func _spawn_interceptor_squadron(entities_root: Node3D, wave_num: int, forward_speed: float) -> void:
+	for side_x: float in [-3.4, 3.4]:
+		var fighter := SpaceEntity3D.new()
+		entities_root.add_child(fighter)
+		fighter.setup_entity(
+			SpaceEntity3D.Kind.ENEMY_INTERCEPTOR,
+			Vector3(side_x, randf_range(-1.8, 2.2), SPAWN_Z - absf(side_x) * 1.5),
+			forward_speed,
+			1.65,
+			wave_num
+		)
+
+
+func spawn_boss_3d(entities_root: Node3D, wave_num: int, forward_speed: float) -> SpaceEntity3D:
+	var boss := SpaceEntity3D.new()
+	entities_root.add_child(boss)
+	boss.setup_entity(
+		SpaceEntity3D.Kind.ENEMY_BOSS_3D,
+		Vector3(0.0, 1.2, -135.0),
+		forward_speed,
+		3.85,
+		wave_num
+	)
+	return boss
 
 
 func _spawn_random_pickup(entities_root: Node3D, forward_speed: float) -> void:

@@ -10,10 +10,12 @@ enum Kind {
 	PLASMA_BASE,
 	PLASMA_HEAVY,
 	VULCAN_BULLET,
-	HOMING_MISSILE
+	HOMING_MISSILE,
+	ENEMY_PLASMA_BOLT
 }
 
 var kind: Kind = Kind.PLASMA_BASE
+var is_enemy: bool = false
 var velocity: Vector3 = Vector3(0.0, 0.0, -110.0)
 var damage: float = 20.0
 var hit_radius: float = 1.15
@@ -40,6 +42,8 @@ static var _mat_plasma_heavy_halo: StandardMaterial3D
 static var _mat_vulcan: StandardMaterial3D
 static var _mat_missile_body: StandardMaterial3D
 static var _mat_missile_flame: StandardMaterial3D
+static var _mat_enemy_core: StandardMaterial3D
+static var _mat_enemy_halo: StandardMaterial3D
 
 
 static func clear_static_caches() -> void:
@@ -55,6 +59,8 @@ static func clear_static_caches() -> void:
 	_mat_vulcan = null
 	_mat_missile_body = null
 	_mat_missile_flame = null
+	_mat_enemy_core = null
+	_mat_enemy_halo = null
 
 
 static func _ensure_shared_resources() -> void:
@@ -130,6 +136,16 @@ static func _ensure_shared_resources() -> void:
 	_mat_missile_flame.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
 	_mat_missile_flame.albedo_color = Color(1.0, 0.52, 0.16, 0.85)
 
+	_mat_enemy_core = StandardMaterial3D.new()
+	_mat_enemy_core.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_mat_enemy_core.albedo_color = Color(1.0, 0.90, 0.92, 1.0)
+
+	_mat_enemy_halo = StandardMaterial3D.new()
+	_mat_enemy_halo.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_mat_enemy_halo.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_mat_enemy_halo.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	_mat_enemy_halo.albedo_color = Color(1.0, 0.20, 0.42, 0.85)
+
 
 func setup_projectile(
 	p_kind: Kind,
@@ -167,11 +183,19 @@ func setup_projectile(
 			lifetime = 1.8
 			_build_vulcan_visual()
 		Kind.HOMING_MISSILE:
+			is_enemy = false
 			damage = 78.0 + dmg_bonus * 1.8
 			hit_radius = 2.1
 			splash_radius = 6.8
 			lifetime = 3.2
 			_build_missile_visual()
+		Kind.ENEMY_PLASMA_BOLT:
+			is_enemy = true
+			damage = 1.0
+			hit_radius = 1.05
+			splash_radius = 0.0
+			lifetime = 3.6
+			_build_enemy_bolt_visual()
 
 
 func _build_plasma_visual(is_heavy: bool) -> void:
@@ -218,6 +242,20 @@ func _build_missile_visual() -> void:
 	_trail_mesh.position = Vector3(0.0, 0.0, 1.45)
 	_trail_mesh.scale = Vector3(1.1, 1.1, 1.1)
 	_visual_root.add_child(_trail_mesh)
+
+
+func _build_enemy_bolt_visual() -> void:
+	var core := MeshInstance3D.new()
+	core.mesh = _sphere_core_mesh
+	core.material_override = _mat_enemy_core
+	core.scale = Vector3(1.25, 1.25, 1.45)
+	_visual_root.add_child(core)
+
+	_outer_halo = MeshInstance3D.new()
+	_outer_halo.mesh = _sphere_halo_mesh
+	_outer_halo.material_override = _mat_enemy_halo
+	_outer_halo.scale = Vector3(1.35, 1.35, 1.65)
+	_visual_root.add_child(_outer_halo)
 
 
 func update_projectile(delta: float) -> bool:

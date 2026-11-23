@@ -49,6 +49,7 @@ var _hyper_charge: float = 0.0 # 0.0 .. 100.0
 var _hyper_timer: float = 0.0
 var _tunnel_timer: float = 0.0
 var _sector_index: int = 0
+var _active_boss: SpaceEntity3D = null
 
 # Таймеры и боезапас мульти-арсенала
 var _timer_heavy_plasma: float = 0.0
@@ -92,6 +93,9 @@ var _lbl_shields: Label
 var _lbl_combo: Label
 var _lbl_banner: Label
 var _banner_timer: float = 0.0
+var _boss_hud_panel: PanelContainer
+var _lbl_boss_title: Label
+var _bar_boss_hp: ProgressBar
 
 var _slot_panels: Array[PanelContainer] = []
 var _slot_labels: Array[Label] = []
@@ -375,14 +379,20 @@ func _update_gameplay_3d(delta: float) -> void:
 		if _banner_timer <= 0.0 and _lbl_banner != null:
 			_lbl_banner.visible = false
 
-	# Прогресс волны
-	if not is_tunnel:
+	# Прогресс волны (при активном 3D-Боссе таймер ждёт победы над Боссом)
+	var has_boss: bool = is_instance_valid(_active_boss) and not _active_boss.is_destroyed and not _active_boss.is_queued_for_deletion()
+	if not is_tunnel and not has_boss:
 		_wave_timer += delta
 		if _wave_timer >= _wave_duration:
 			_wave_timer = 0.0
 			_wave += 1
 			_config.update_wave_checkpoint(_is_assault_mode, _wave)
-			_show_banner("ВОЛНА %d — СКОРОСТЬ ПОТОКА РАСТЁТ!" % _wave, Color(0.32, 0.96, 1.0), 2.3)
+			if _wave % 3 == 0:
+				_active_boss = _director.spawn_boss_3d(_entities_root, _wave, _base_forward_speed)
+				_audio.play_boss_warning()
+				_show_banner("ВНИМАНИЕ! В СЕКТОРЕ " + _active_boss.boss_title + "!", Color(1.0, 0.35, 0.55), 3.4)
+			else:
+				_show_banner("ВОЛНА %d — СКОРОСТЬ ПОТОКА РАСТЁТ!" % _wave, Color(0.32, 0.96, 1.0), 2.3)
 
 	# Скорость полёта сквозь 3D-космос
 	var wave_speed_add: float = float(_wave - 1) * 2.1
@@ -488,18 +498,27 @@ func _update_weapons_3d(delta: float, is_overdrive: bool) -> void:
 	if _timer_laser > 0.0:
 		_timer_laser = maxf(0.0, _timer_laser - delta)
 
-	# 1. Базовая спаренная Плазма из крыльевых орудий глайдера (работает всегда!)
+	# Умный 3D-автозахват прицела (Target Lock-On) на ближайшую угрозу впереди по курсу
+	var lock_target: SpaceEntity3D = _find_best_meteor_target(68.0, 6.2)
+	_glider.update_target_lock(lock_target != null, lock_target.global_position if lock_target != null else Vector3.ZERO, delta)
+
+	# 1. Базовая спаренная Плазма из крыльевых орудий глайдера (работает всегда, с мягким доворотом на захваченную 3D-цель!)
 	_cd_base_plasma -= delta * fire_rate_mult
 	if _cd_base_plasma <= 0.0:
 		_cd_base_plasma = 0.22
 		var muzzles: Array[Vector3] = _glider.get_muzzle_positions()
 		for m_pos: Vector3 in muzzles:
+			var bolt_vel := Vector3(0.0, 0.0, -118.0)
+			if lock_target != null:
+				var to_lock: Vector3 = (lock_target.global_position - m_pos).normalized()
+				var forward_dir := Vector3(0.0, 0.0, -1.0).lerp(to_lock, 0.38).normalized()
+				bolt_vel = forward_dir * 118.0
 			var p := WeaponProjectile3D.new()
 			_projectiles_root.add_child(p)
 			p.setup_projectile(
 				WeaponProjectile3D.Kind.PLASMA_BASE,
 				m_pos,
-				Vector3(0.0, 0.0, -118.0),
+				bolt_vel,
 				dmg_bonus
 			)
 		_audio.play_plasma_fire(false)
@@ -601,15 +620,16 @@ func _find_best_meteor_target(max_dist_z: float, max_xy_offset: float) -> SpaceE
 
 	for child: Node in _entities_root.get_children():
 		var ent := child as SpaceEntity3D
-		if ent == null or not ent.is_meteor():
+		if ent == null or not ent.is_hostile() or ent.is_destroyed or ent.is_queued_for_deletion():
 			continue
 		var dz: float = g_pos.z - ent.global_position.z
 		if dz < 1.5 or dz > max_dist_z:
 			continue
 		var dxy: float = Vector2(ent.global_position.x - g_pos.x, ent.global_position.y - g_pos.y).length()
-		if dxy > max_xy_offset:
+		var max_off: float = max_xy_offset + (2.5 if ent.kind == SpaceEntity3D.Kind.ENEMY_BOSS_3D else 0.0)
+		if dxy > max_off:
 			continue
-		var score_val: float = dz + dxy * 2.4
+		var score_val: float = dz + dxy * 2.4 - (12.0 if ent.is_enemy_ship() else 0.0)
 		if score_val < best_score:
 			best_score = score_val
 			best = ent
@@ -617,6 +637,9 @@ func _find_best_meteor_target(max_dist_z: float, max_xy_offset: float) -> SpaceE
 
 
 func _update_projectiles_3d(delta: float) -> void:
+	var g_pos: Vector3 = _glider.global_position
+	var is_warp_invuln: bool = (_hyper_timer > 0.0 or _tunnel_timer > 0.0)
+
 	for child: Node in _projectiles_root.get_children():
 		var proj := child as WeaponProjectile3D
 		if proj == null:
@@ -625,19 +648,35 @@ func _update_projectiles_3d(delta: float) -> void:
 			proj.queue_free()
 			continue
 
-		# Проверка попадания 3D-снаряда плазмы/ракеты в 3D-метеориты
-		var hit_any: bool = false
 		var p_pos: Vector3 = proj.global_position
+
+		# Если это вражеский плазменный снаряд — проверяем попадание по 3D-глайдеру
+		if proj.is_enemy:
+			if p_pos.distance_to(g_pos) <= proj.hit_radius + 1.25:
+				proj.queue_free()
+				if not is_warp_invuln:
+					_damage_glider_shield(p_pos)
+				else:
+					_fx3d.spawn_hit_spark(p_pos, Color(0.32, 1.0, 0.78))
+			continue
+
+		# Проверка попадания 3D-снаряда глайдера в метеориты, катера и 3D-боссов
+		var hit_any: bool = false
 		for e_child: Node in _entities_root.get_children():
 			var ent := e_child as SpaceEntity3D
-			if ent == null or not ent.is_meteor() or ent.is_queued_for_deletion():
+			if ent == null or not ent.is_hostile() or ent.is_destroyed or ent.is_queued_for_deletion():
 				continue
 			var combined_r: float = proj.hit_radius + ent.radius
 			if p_pos.distance_squared_to(ent.global_position) <= combined_r * combined_r:
 				hit_any = true
 				var spark_col := Color(0.28, 1.0, 0.62) if proj.kind == WeaponProjectile3D.Kind.PLASMA_HEAVY else Color(0.22, 0.94, 1.0)
 				_fx3d.spawn_hit_spark(p_pos, spark_col)
-				if ent.apply_damage(proj.damage):
+				var was_enraged: bool = ent.boss_enraged
+				var killed: bool = ent.apply_damage(proj.damage)
+				if ent.kind == SpaceEntity3D.Kind.ENEMY_BOSS_3D and ent.boss_enraged and not was_enraged:
+					_audio.play_boss_warning()
+					_show_banner(ent.boss_title + " — ФАЗА ЯРОСТИ!", Color(1.0, 0.32, 0.25), 2.4)
+				if killed:
 					_on_meteor_destroyed(ent)
 
 				# Если у снаряда есть взрывная волна (Тяжёлая плазма или 3D-Ракета)
@@ -654,7 +693,7 @@ func _apply_aoe_explosion(center: Vector3, radius: float, aoe_dmg: float, col: C
 	var r_sq: float = radius * radius
 	for e_child: Node in _entities_root.get_children():
 		var ent := e_child as SpaceEntity3D
-		if ent == null or not ent.is_meteor() or ent.is_queued_for_deletion():
+		if ent == null or not ent.is_hostile() or ent.is_destroyed or ent.is_queued_for_deletion():
 			continue
 		if center.distance_squared_to(ent.global_position) <= r_sq:
 			if ent.apply_damage(aoe_dmg):
@@ -669,43 +708,67 @@ func _on_meteor_destroyed(ent: SpaceEntity3D) -> void:
 	var rad: float = ent.radius
 	var is_bomb: bool = ent.is_plasma_bomb()
 	var is_crystal: bool = ent.kind == SpaceEntity3D.Kind.METEOR_CRYSTAL
+	var is_boss: bool = ent.kind == SpaceEntity3D.Kind.ENEMY_BOSS_3D
+	var is_interceptor: bool = ent.kind == SpaceEntity3D.Kind.ENEMY_INTERCEPTOR
 
 	var pts: int = ent.score_value * _combo
 	_score += pts
-	_add_hyper_charge(6.5 if is_bomb else 3.5)
+	_add_hyper_charge(25.0 if is_boss else (8.0 if is_interceptor else (6.5 if is_bomb else 3.5)))
 
 	var exp_col := Color(0.32, 0.88, 1.0)
 	if ent.kind == SpaceEntity3D.Kind.METEOR_PLASMA_GREEN:
 		exp_col = Color(0.22, 1.0, 0.55)
 	elif ent.kind == SpaceEntity3D.Kind.METEOR_PLASMA_GOLD:
 		exp_col = Color(1.0, 0.72, 0.18)
+	elif is_boss or is_interceptor:
+		exp_col = Color(1.0, 0.28, 0.52)
+
+	if is_boss and _active_boss == ent:
+		_active_boss = null
 
 	ent.queue_free()
-	_fx3d.spawn_meteor_explosion(pos, rad, exp_col, is_bomb)
+	_fx3d.spawn_meteor_explosion(pos, rad, exp_col, is_bomb or is_boss)
+
+	if is_boss:
+		_audio.play_boss_explode()
+		_cam_shake = 1.1
+		_trigger_screen_flash(Color(1.0, 0.32, 0.55), 0.48)
+		_show_banner(ent.boss_title + " УНИЧТОЖЕН! ОТКРЫТА 3D ЧЁРНАЯ ДЫРА!", Color(1.0, 0.88, 0.30), 3.4)
+		# Очищаем вражеские снаряды и открываем портал 3D Чёрной дыры прямо по курсу!
+		for p_node: Node in _projectiles_root.get_children():
+			var pr := p_node as WeaponProjectile3D
+			if pr != null and pr.is_enemy:
+				pr.queue_free()
+		var bh := SpaceEntity3D.new()
+		_entities_root.add_child(bh)
+		bh.setup_entity(SpaceEntity3D.Kind.BLACK_HOLE_PORTAL, Vector3(0.0, 1.2, -52.0), _base_forward_speed, 4.6, _wave)
+		return
 
 	if is_bomb:
 		_audio.play_bomb_explode()
 		_cam_shake = maxf(_cam_shake, 0.65)
 		_spawn_floating_3d_text(pos, "+%d ПЛАЗМА-ВЗРЫВ!" % pts, exp_col)
-		# Цепная детонация соседних метеоритов!
+		# Цепная детонация соседних метеоритов и врагов!
 		var blast_r: float = 8.5 if ent.kind == SpaceEntity3D.Kind.METEOR_PLASMA_GOLD else 6.8
 		var blast_dmg: float = 95.0 if ent.kind == SpaceEntity3D.Kind.METEOR_PLASMA_GOLD else 70.0
 		for other_node: Node in _entities_root.get_children():
 			var other := other_node as SpaceEntity3D
-			if other != null and other != ent and other.is_meteor() and not other.is_destroyed and not other.is_queued_for_deletion():
+			if other != null and other != ent and other.is_hostile() and not other.is_destroyed and not other.is_queued_for_deletion():
 				if pos.distance_to(other.global_position) <= blast_r:
 					if other.apply_damage(blast_dmg):
 						_on_meteor_destroyed(other)
 	else:
 		_audio.play_asteroid_explode()
 		_cam_shake = maxf(_cam_shake, 0.22)
+		if is_interceptor:
+			_spawn_floating_3d_text(pos, "+%d ПЕРЕХВАТЧИК!" % pts, exp_col)
 
-	# Из кристаллических и крупных метеоритов выпадает энергетическая сфера или оружие!
-	if is_crystal or (rad >= 2.2 and randf() < 0.35):
+	# Из кристаллических метеоритов и сбитых 3D-перехватчиков выпадает сфера энергии или оружие!
+	if is_crystal or is_interceptor or (rad >= 2.2 and randf() < 0.35):
 		var drop := SpaceEntity3D.new()
 		_entities_root.add_child(drop)
 		var drop_kind: SpaceEntity3D.Kind = SpaceEntity3D.Kind.ORB_ENERGY
-		if is_crystal and randf() < 0.55:
+		if (is_crystal or is_interceptor) and randf() < 0.55:
 			drop_kind = SpaceEntity3D.pick_random_weapon_orb_kind()
 		drop.setup_entity(drop_kind, pos, _base_forward_speed * 0.75, 1.15, _wave)
 
@@ -745,11 +808,16 @@ func _update_entities_3d(delta: float, speed_mult: float, is_invulnerable_warp: 
 				_collect_orb(ent)
 			continue
 
-		# 3. Столкновение или близкий вираж (Graze) с 3D-метеоритом
-		if ent.is_meteor():
+		# 3. Огонь вражеских 3D-кораблей и столкновения / виражи с угрозами
+		if ent.is_enemy_ship() and not is_invulnerable_warp:
+			ent.fire_cooldown -= delta
+			if ent.fire_cooldown <= 0.0 and ent.global_position.z < -8.0 and ent.global_position.z > -95.0:
+				ent.fire_cooldown = ent.fire_interval
+				_fire_enemy_weapons_3d(ent)
+
+		if ent.is_hostile():
 			if dist <= ent.radius + glider_hit_r:
-				if is_invulnerable_warp:
-					# На Гиперскорости или в Гипер-туннеле глайдер таранит и крушит метеориты!
+				if is_invulnerable_warp and ent.kind != SpaceEntity3D.Kind.ENEMY_BOSS_3D:
 					_on_meteor_destroyed(ent)
 				else:
 					_on_glider_hit_meteor(ent)
@@ -762,6 +830,30 @@ func _update_entities_3d(delta: float, speed_mult: float, is_invulnerable_warp: 
 				_add_hyper_charge(4.5)
 				_audio.play_graze(_combo)
 				_spawn_floating_3d_text(ent.global_position, "ВИРАЖ x%d +%d" % [_combo, graze_pts], Color(0.35, 0.98, 1.0))
+
+
+func _fire_enemy_weapons_3d(ent: SpaceEntity3D) -> void:
+	var g_pos: Vector3 = _glider.global_position
+	var start_pos: Vector3 = ent.global_position + Vector3(0.0, 0.0, 1.8)
+	var to_player: Vector3 = (g_pos - start_pos).normalized()
+	if to_player.z < 0.25:
+		to_player.z = 0.65
+		to_player = to_player.normalized()
+
+	_audio.play_enemy_fire()
+	if ent.kind == SpaceEntity3D.Kind.ENEMY_INTERCEPTOR:
+		var bolt := WeaponProjectile3D.new()
+		_projectiles_root.add_child(bolt)
+		bolt.setup_projectile(WeaponProjectile3D.Kind.ENEMY_PLASMA_BOLT, start_pos, to_player * 56.0)
+	elif ent.kind == SpaceEntity3D.Kind.ENEMY_BOSS_3D:
+		ent.attack_counter += 1
+		var fan_count: int = 5 if ent.boss_enraged else 3
+		for i: int in range(fan_count):
+			var spread: float = (float(i) - float(fan_count - 1) * 0.5) * 0.14
+			var dir := Vector3(to_player.x + spread, to_player.y + (ent.attack_counter % 2 - 0.5) * 0.06, to_player.z).normalized()
+			var b := WeaponProjectile3D.new()
+			_projectiles_root.add_child(b)
+			b.setup_projectile(WeaponProjectile3D.Kind.ENEMY_PLASMA_BOLT, start_pos + Vector3(spread * 6.0, 0.0, 0.0), dir * 60.0)
 
 
 func _collect_orb(ent: SpaceEntity3D) -> void:
@@ -783,12 +875,24 @@ func _collect_orb(ent: SpaceEntity3D) -> void:
 			_audio.play_orb_pickup(true, _combo)
 			_spawn_floating_3d_text(pos, "+28% ГИПЕР-ЯДРО!", Color(0.96, 0.35, 1.0))
 		SpaceEntity3D.Kind.ORB_SHIELD:
+			# 3D ЭМИ-Импульс испаряет все вражеские плазменные снаряды в пространстве!
+			var cleared_bolts: int = 0
+			for p_child: Node in _projectiles_root.get_children():
+				var pr := p_child as WeaponProjectile3D
+				if pr != null and pr.is_enemy and not pr.is_queued_for_deletion():
+					cleared_bolts += 1
+					_fx3d.spawn_hit_spark(pr.global_position, Color(0.24, 1.0, 0.72))
+					pr.queue_free()
+
 			if _shields < _max_shields:
 				_shields += 1
-				_spawn_floating_3d_text(pos, "+1 ГРАВИ-ЩИТ!", Color(0.24, 1.0, 0.68))
+				_score += (90 + cleared_bolts * 35) * _combo
+				_spawn_floating_3d_text(pos, "+1 ЩИТ • ЭМИ-ОЧИСТКА!", Color(0.24, 1.0, 0.68))
 			else:
-				_score += 300
-				_spawn_floating_3d_text(pos, "ЩИТ МАКС +300", Color(0.24, 1.0, 0.68))
+				var emp_pts: int = (280 + cleared_bolts * 35) * _combo
+				_score += emp_pts
+				_apply_aoe_explosion(_glider.global_position + Vector3(0.0, 0.0, -18.0), 18.0, 85.0, Color(0.24, 1.0, 0.72))
+				_spawn_floating_3d_text(pos, "СВЕРХЗАРЯД ЭМИ +%d!" % emp_pts, Color(1.0, 0.88, 0.30))
 			_glider.trigger_shield_flash(false)
 			_audio.play_shield_restore()
 		SpaceEntity3D.Kind.ORB_WEAPON_PLASMA:
@@ -817,9 +921,13 @@ func _collect_orb(ent: SpaceEntity3D) -> void:
 func _on_glider_hit_meteor(ent: SpaceEntity3D) -> void:
 	var pos: Vector3 = ent.global_position
 	var rad: float = ent.radius
-	ent.queue_free()
+	if ent.kind != SpaceEntity3D.Kind.ENEMY_BOSS_3D:
+		ent.queue_free()
 	_fx3d.spawn_meteor_explosion(pos, rad, Color(1.0, 0.35, 0.45), true)
+	_damage_glider_shield(pos)
 
+
+func _damage_glider_shield(hit_pos: Vector3) -> void:
 	if _glider.is_damage_invulnerable():
 		return
 
@@ -829,6 +937,7 @@ func _on_glider_hit_meteor(ent: SpaceEntity3D) -> void:
 	_audio.play_shield_hit()
 	_cam_shake = 1.0
 	_trigger_screen_flash(Color(1.0, 0.22, 0.36), 0.42)
+	_fx3d.spawn_hit_spark(hit_pos, Color(1.0, 0.30, 0.45))
 
 	if _config.vibration_enabled and DisplayServer.get_name() != "headless":
 		Input.vibrate_handheld(90)
@@ -1147,6 +1256,9 @@ func _apply_hud_safe_margins() -> void:
 	if _lbl_banner != null:
 		_lbl_banner.position = Vector2(16.0, top_y + 164.0)
 		_lbl_banner.size = Vector2(_view_w - 32.0, 44.0)
+	if _boss_hud_panel != null:
+		_boss_hud_panel.position = Vector2(20.0, top_y + 210.0)
+		_boss_hud_panel.size = Vector2(_view_w - 40.0, 42.0)
 
 	for item: Dictionary in _modal_cards:
 		var card := item.get("card") as Control
@@ -1292,6 +1404,42 @@ func _build_hud_ui() -> void:
 	_lbl_banner.visible = false
 	_hud_root.add_child(_lbl_banner)
 
+	# 5. Панель здоровья 3D Босса-Дредноута (появляется во время битвы с 3D-Боссом)
+	_boss_hud_panel = UiBuilder.create_glass_panel(
+		Color(0.14, 0.03, 0.08, 0.90),
+		Color(1.0, 0.28, 0.48, 0.88),
+		10,
+		10.0,
+		4.0
+	)
+	_boss_hud_panel.position = Vector2(20.0, 220.0)
+	_boss_hud_panel.size = Vector2(VIEW_W - 40.0, 42.0)
+	_boss_hud_panel.visible = false
+	_hud_root.add_child(_boss_hud_panel)
+
+	var boss_vbox := VBoxContainer.new()
+	boss_vbox.add_theme_constant_override("separation", 3)
+	_boss_hud_panel.add_child(boss_vbox)
+
+	_lbl_boss_title = UiBuilder.create_label("КРЕЙСЕР «ТИТАН-3D»", 12, Color(1.0, 0.58, 0.72), HORIZONTAL_ALIGNMENT_CENTER)
+	boss_vbox.add_child(_lbl_boss_title)
+
+	_bar_boss_hp = ProgressBar.new()
+	_bar_boss_hp.min_value = 0.0
+	_bar_boss_hp.max_value = 100.0
+	_bar_boss_hp.value = 100.0
+	_bar_boss_hp.show_percentage = false
+	_bar_boss_hp.custom_minimum_size = Vector2(0.0, 10.0)
+	var b_bg := StyleBoxFlat.new()
+	b_bg.bg_color = Color(0.06, 0.01, 0.03, 0.95)
+	b_bg.set_corner_radius_all(5)
+	_bar_boss_hp.add_theme_stylebox_override("background", b_bg)
+	var b_fg := StyleBoxFlat.new()
+	b_fg.bg_color = Color(1.0, 0.24, 0.46, 0.98)
+	b_fg.set_corner_radius_all(5)
+	_bar_boss_hp.add_theme_stylebox_override("fill", b_fg)
+	boss_vbox.add_child(_bar_boss_hp)
+
 
 func _update_hud_ui() -> void:
 	if _hud_root == null or not _hud_root.visible:
@@ -1312,6 +1460,15 @@ func _update_hud_ui() -> void:
 		_lbl_sector.text = "ГИПЕРСКОРОСТЬ АКТИВНА: %.1f СЕК" % _hyper_timer
 	else:
 		_lbl_sector.text = _env3d.get_current_sector_name()
+
+	if _boss_hud_panel != null:
+		var has_b: bool = is_instance_valid(_active_boss) and not _active_boss.is_destroyed and not _active_boss.is_queued_for_deletion()
+		_boss_hud_panel.visible = has_b
+		if has_b:
+			var pct: float = clampf((_active_boss.hp / maxf(1.0, _active_boss.max_hp)) * 100.0, 0.0, 100.0)
+			_bar_boss_hp.value = pct
+			var rage_str: String = " [ЯРОСТЬ]" if _active_boss.boss_enraged else ""
+			_lbl_boss_title.text = "%s%s — %d%%" % [_active_boss.boss_title, rage_str, int(ceil(pct))]
 
 	# Обновляем 4 слота оружия
 	_update_weapon_slot_ui(0, "ПЛАЗМА+", _timer_heavy_plasma > 0.0, "%.0fс" % ceil(_timer_heavy_plasma), Color(0.28, 1.0, 0.55))
