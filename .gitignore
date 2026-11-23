@@ -1,0 +1,14 @@
+# Godot 4+ specific ignores
+.godot/
+.nomedia
+
+# Android builds
+*.apk
+*.aab
+*.idsig
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+*.tmp
+*~
