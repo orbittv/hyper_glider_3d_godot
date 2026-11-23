@@ -188,13 +188,7 @@ func _spawn_random_pickup(entities_root: Node3D, forward_speed: float) -> void:
 
 
 func _pick_weapon_or_hyper_kind() -> SpaceEntity3D.Kind:
-	var weapons: Array[SpaceEntity3D.Kind] = [
-		SpaceEntity3D.Kind.ORB_WEAPON_PLASMA,
-		SpaceEntity3D.Kind.ORB_WEAPON_VULCAN,
-		SpaceEntity3D.Kind.ORB_WEAPON_LASER,
-		SpaceEntity3D.Kind.ORB_WEAPON_MISSILE
-	]
-	return weapons[randi() % weapons.size()]
+	return SpaceEntity3D.pick_random_weapon_orb_kind()
 
 
 func _spawn_black_hole_portal(entities_root: Node3D, forward_speed: float) -> void:

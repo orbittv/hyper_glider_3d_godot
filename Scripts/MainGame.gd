@@ -35,6 +35,7 @@ var _projectiles_root: Node3D
 # Параметры текущего вылета
 var _is_assault_mode: bool = false
 var _score: int = 0
+var _last_banked_score: int = 0
 var _wave: int = 1
 var _wave_timer: float = 0.0
 var _wave_duration: float = 26.0
@@ -156,13 +157,31 @@ func _notification(what: int) -> void:
 		NOTIFICATION_APPLICATION_FOCUS_OUT, NOTIFICATION_APPLICATION_PAUSED:
 			_active_touches.clear()
 			_is_dragging = false
+			_bank_uncommitted_credits()
 			if _state == GameState.PLAYING:
 				_toggle_pause(true)
 			if _config != null:
 				_config.save_data()
 		NOTIFICATION_WM_CLOSE_REQUEST:
+			_bank_uncommitted_credits()
 			if _config != null:
 				_config.save_data()
+
+
+func _bank_uncommitted_credits() -> void:
+	if _config == null or _score <= _last_banked_score:
+		return
+	var diff_score: int = _score - _last_banked_score
+	_last_banked_score = _score
+	var added_credits: int = maxi(1, int(round(float(diff_score) * 0.25)))
+	_config.upgrade_points += added_credits
+	_config.save_data()
+
+
+func _close_all_modals() -> void:
+	for overlay: Control in [_menu_overlay, _pause_overlay, _gameover_overlay, _hangar_overlay, _settings_overlay]:
+		if overlay != null:
+			overlay.visible = false
 
 
 func _handle_back_navigation() -> void:
@@ -184,6 +203,7 @@ func _handle_back_navigation() -> void:
 
 
 func _exit_tree() -> void:
+	Engine.time_scale = 1.0
 	_active_touches.clear()
 	_modal_cards.clear()
 	_floating_labels.clear()
@@ -644,6 +664,7 @@ func _apply_aoe_explosion(center: Vector3, radius: float, aoe_dmg: float, col: C
 func _on_meteor_destroyed(ent: SpaceEntity3D) -> void:
 	if ent == null or ent.is_queued_for_deletion():
 		return
+	ent.is_destroyed = true
 	var pos: Vector3 = ent.global_position
 	var rad: float = ent.radius
 	var is_bomb: bool = ent.is_plasma_bomb()
@@ -671,7 +692,7 @@ func _on_meteor_destroyed(ent: SpaceEntity3D) -> void:
 		var blast_dmg: float = 95.0 if ent.kind == SpaceEntity3D.Kind.METEOR_PLASMA_GOLD else 70.0
 		for other_node: Node in _entities_root.get_children():
 			var other := other_node as SpaceEntity3D
-			if other != null and other != ent and other.is_meteor() and not other.is_queued_for_deletion():
+			if other != null and other != ent and other.is_meteor() and not other.is_destroyed and not other.is_queued_for_deletion():
 				if pos.distance_to(other.global_position) <= blast_r:
 					if other.apply_damage(blast_dmg):
 						_on_meteor_destroyed(other)
@@ -685,13 +706,7 @@ func _on_meteor_destroyed(ent: SpaceEntity3D) -> void:
 		_entities_root.add_child(drop)
 		var drop_kind: SpaceEntity3D.Kind = SpaceEntity3D.Kind.ORB_ENERGY
 		if is_crystal and randf() < 0.55:
-			var w_choices: Array[SpaceEntity3D.Kind] = [
-				SpaceEntity3D.Kind.ORB_WEAPON_PLASMA,
-				SpaceEntity3D.Kind.ORB_WEAPON_VULCAN,
-				SpaceEntity3D.Kind.ORB_WEAPON_LASER,
-				SpaceEntity3D.Kind.ORB_WEAPON_MISSILE
-			]
-			drop_kind = w_choices[randi() % w_choices.size()]
+			drop_kind = SpaceEntity3D.pick_random_weapon_orb_kind()
 		drop.setup_entity(drop_kind, pos, _base_forward_speed * 0.75, 1.15, _wave)
 
 
@@ -972,6 +987,7 @@ func _clear_world_entities() -> void:
 
 
 func _enter_menu_state() -> void:
+	_bank_uncommitted_credits()
 	_state = GameState.MENU
 	_clear_world_entities()
 	_glider.reset_glider()
@@ -979,10 +995,7 @@ func _enter_menu_state() -> void:
 	_audio.set_hyper_mode(false)
 	_audio.set_tunnel_mode(false)
 	_hud_root.visible = false
-	_pause_overlay.visible = false
-	_gameover_overlay.visible = false
-	_hangar_overlay.visible = false
-	_settings_overlay.visible = false
+	_close_all_modals()
 	_menu_overlay.visible = true
 	_refresh_menu_ui()
 
@@ -995,6 +1008,7 @@ func _start_new_run() -> void:
 
 	_state = GameState.PLAYING
 	_score = 0
+	_last_banked_score = 0
 	_wave = _config.get_saved_wave(_is_assault_mode)
 	_wave_timer = 0.0
 	_max_shields = _config.get_max_shields()
@@ -1018,11 +1032,7 @@ func _start_new_run() -> void:
 	_audio.set_hyper_mode(false)
 	_audio.set_tunnel_mode(false)
 
-	_menu_overlay.visible = false
-	_pause_overlay.visible = false
-	_gameover_overlay.visible = false
-	_hangar_overlay.visible = false
-	_settings_overlay.visible = false
+	_close_all_modals()
 	_hud_root.visible = true
 
 	_show_banner(_env3d.get_current_sector_name() + " — ПОЛЁТ НАЧАТ!", Color(0.32, 0.96, 1.0), 2.8)
@@ -1047,9 +1057,12 @@ func _trigger_game_over() -> void:
 	_glider.hide_quantum_laser()
 
 	var is_new_rec: bool = _config.register_run_result(_is_assault_mode, _score, _wave)
-	var earned_credits: int = maxi(50, int(round(float(_score) * 0.25)) + _wave * 65)
-	_config.upgrade_points += earned_credits
+	var prev_credits: int = _config.upgrade_points
+	_bank_uncommitted_credits()
+	var wave_bonus_credits: int = _wave * 65
+	_config.upgrade_points += wave_bonus_credits
 	_config.save_data()
+	var earned_credits: int = _config.upgrade_points - prev_credits
 
 	var mode_title: String = "ГИПЕР-ШТУРМ 3D" if _is_assault_mode else "КОСМО-РЕЙД 3D"
 	var rec_tag: String = "\nНОВЫЙ РЕКОРД СЕКТОРА!" if is_new_rec else ""

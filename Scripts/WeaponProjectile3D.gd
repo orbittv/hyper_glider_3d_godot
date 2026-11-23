@@ -226,7 +226,7 @@ func update_projectile(delta: float) -> bool:
 		return false
 
 	if kind == Kind.HOMING_MISSILE:
-		if is_instance_valid(target_entity) and target_entity.is_inside_tree():
+		if is_instance_valid(target_entity) and target_entity.is_inside_tree() and not target_entity.is_queued_for_deletion():
 			var to_target: Vector3 = target_entity.global_position - global_position
 			if to_target.length_squared() > 0.25:
 				var desired_dir: Vector3 = to_target.normalized()
@@ -234,6 +234,7 @@ func update_projectile(delta: float) -> bool:
 				var new_dir: Vector3 = velocity.normalized().lerp(desired_dir, clampf(delta * 7.5, 0.0, 1.0)).normalized()
 				velocity = new_dir * minf(current_speed + delta * 42.0, 145.0)
 		else:
+			target_entity = null
 			velocity.z -= delta * 35.0
 
 		if velocity.length_squared() > 1.0 and _visual_root != null:

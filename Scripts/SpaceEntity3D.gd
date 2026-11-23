@@ -29,6 +29,7 @@ var score_value: int = 50
 var velocity: Vector3 = Vector3(0.0, 0.0, 42.0)
 var rot_speed: Vector3 = Vector3(1.0, 1.4, 0.7)
 var grazed: bool = false
+var is_destroyed: bool = false
 var age: float = 0.0
 
 var _visual_root: Node3D
@@ -48,15 +49,28 @@ static var _mat_plasma_green_core: StandardMaterial3D
 static var _mat_plasma_gold_core: StandardMaterial3D
 static var _mat_black_hole_void: StandardMaterial3D
 static var _mat_black_hole_disk: ShaderMaterial
+static var _orb_materials: Dictionary = {}
 
 static var _orb_sphere_mesh: SphereMesh
 static var _orb_ring_mesh: TorusMesh
 static var _bh_void_mesh: SphereMesh
 static var _bh_disk_mesh: QuadMesh
 
+const WEAPON_ORB_KINDS: Array[Kind] = [
+	Kind.ORB_WEAPON_PLASMA,
+	Kind.ORB_WEAPON_VULCAN,
+	Kind.ORB_WEAPON_LASER,
+	Kind.ORB_WEAPON_MISSILE
+]
+
+
+static func pick_random_weapon_orb_kind() -> Kind:
+	return WEAPON_ORB_KINDS[randi() % WEAPON_ORB_KINDS.size()]
+
 
 static func clear_static_caches() -> void:
 	_rock_meshes.clear()
+	_orb_materials.clear()
 	_mat_rock_brown = null
 	_mat_rock_slate = null
 	_mat_rock_crystal = null
@@ -141,6 +155,24 @@ static func _ensure_shared_assets() -> void:
 
 	_bh_disk_mesh = QuadMesh.new()
 	_bh_disk_mesh.size = Vector2(15.5, 15.5)
+
+	var orb_colors: Dictionary = {
+		Kind.ORB_ENERGY: Color(0.20, 0.92, 1.0, 0.95),
+		Kind.ORB_HYPER_CORE: Color(0.95, 0.25, 1.0, 0.98),
+		Kind.ORB_SHIELD: Color(0.20, 1.0, 0.65, 0.98),
+		Kind.ORB_WEAPON_PLASMA: Color(0.28, 1.0, 0.45, 0.98),
+		Kind.ORB_WEAPON_VULCAN: Color(1.0, 0.84, 0.22, 0.98),
+		Kind.ORB_WEAPON_LASER: Color(0.25, 0.96, 1.0, 0.98),
+		Kind.ORB_WEAPON_MISSILE: Color(1.0, 0.36, 0.28, 0.98)
+	}
+	_orb_materials.clear()
+	for k: Kind in orb_colors.keys():
+		var m := StandardMaterial3D.new()
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		m.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		m.albedo_color = orb_colors[k]
+		_orb_materials[k] = m
 
 
 static func _generate_procedural_asteroid_mesh(seed_val: int) -> ArrayMesh:
@@ -312,28 +344,7 @@ func _build_meteor_visual(variant_type: int) -> void:
 
 
 func _build_orb_visual() -> void:
-	var col_core: Color = Color(0.20, 0.94, 1.0, 0.95)
-	match kind:
-		Kind.ORB_ENERGY:
-			col_core = Color(0.20, 0.92, 1.0, 0.95)
-		Kind.ORB_HYPER_CORE:
-			col_core = Color(0.95, 0.25, 1.0, 0.98)
-		Kind.ORB_SHIELD:
-			col_core = Color(0.20, 1.0, 0.65, 0.98)
-		Kind.ORB_WEAPON_PLASMA:
-			col_core = Color(0.28, 1.0, 0.45, 0.98)
-		Kind.ORB_WEAPON_VULCAN:
-			col_core = Color(1.0, 0.84, 0.22, 0.98)
-		Kind.ORB_WEAPON_LASER:
-			col_core = Color(0.25, 0.96, 1.0, 0.98)
-		Kind.ORB_WEAPON_MISSILE:
-			col_core = Color(1.0, 0.36, 0.28, 0.98)
-
-	var mat_orb := StandardMaterial3D.new()
-	mat_orb.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat_orb.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat_orb.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-	mat_orb.albedo_color = col_core
+	var mat_orb: StandardMaterial3D = _orb_materials.get(kind, _orb_materials.get(Kind.ORB_ENERGY)) as StandardMaterial3D
 
 	_plasma_core_inst = MeshInstance3D.new()
 	_plasma_core_inst.mesh = _orb_sphere_mesh
@@ -397,13 +408,16 @@ func is_pickup_orb() -> bool:
 
 
 func apply_damage(amount: float) -> bool:
-	if not is_meteor():
+	if is_destroyed or not is_meteor():
 		return false
 	hp -= amount
 	_hit_flash_timer = 0.07
 	if _rock_mesh_inst != null and _mat_hit_flash != null:
 		_rock_mesh_inst.material_override = _mat_hit_flash
-	return hp <= 0.0
+	if hp <= 0.0:
+		is_destroyed = true
+		return true
+	return false
 
 
 func update_entity(delta: float, speed_mult: float, glider_pos: Vector3, magnet_radius: float) -> bool:

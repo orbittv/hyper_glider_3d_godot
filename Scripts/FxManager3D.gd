@@ -1,19 +1,23 @@
 class_name FxManager3D
 extends Node3D
 
-## Менеджер 3D-спецэффектов:
-## - 3D-разлёт каменных осколков при взрыве метеоритов
-## - Тонкие плазменные ударные кольца (TorusMesh) и компактные искры (не перекрывающие обзор 3D-космоса)
+## Менеджер 3D-спецэффектов без утечек памяти и лишних аллокаций материалов:
+## - 3D-разлёт каменных осколков с кэшированными материалами (0 аллокаций StandardMaterial3D на осколках)
+## - Тонкие плазменные ударные кольца (TorusMesh) и компактные искры с лимитом MAX_ACTIVE_EFFECTS
+
+const MAX_ACTIVE_EFFECTS: int = 72
 
 var _effects: Array[Dictionary] = []
 
 static var _sphere_mesh: SphereMesh
 static var _ring_mesh: TorusMesh
+static var _shard_materials: Array[StandardMaterial3D] = []
 
 
 static func clear_static_caches() -> void:
 	_sphere_mesh = null
 	_ring_mesh = null
+	_shard_materials.clear()
 
 
 func _exit_tree() -> void:
@@ -35,6 +39,41 @@ static func _ensure_meshes() -> void:
 	_ring_mesh.rings = 20
 	_ring_mesh.ring_segments = 8
 
+	_shard_materials.clear()
+	var shard_tints: Array[Color] = [
+		Color(0.32, 0.88, 1.0),
+		Color(0.22, 1.0, 0.55),
+		Color(1.0, 0.72, 0.18),
+		Color(1.0, 0.35, 0.48)
+	]
+	for tint: Color in shard_tints:
+		var sm := StandardMaterial3D.new()
+		sm.albedo_color = tint.lerp(Color(0.38, 0.34, 0.32), 0.60)
+		sm.emission_enabled = true
+		sm.emission = tint * 0.65
+		_shard_materials.append(sm)
+
+
+static func _pick_shard_material(col: Color) -> StandardMaterial3D:
+	if _shard_materials.is_empty():
+		return null
+	if col.g > 0.85 and col.r < 0.45 and col.b < 0.70:
+		return _shard_materials[1] # Зелёная плазма
+	if col.r > 0.85 and col.g > 0.55:
+		return _shard_materials[2] # Золотая плазма
+	if col.r > 0.85 and col.g < 0.50:
+		return _shard_materials[3] # Багровый взрыв
+	return _shard_materials[0] # Квантовый циан
+
+
+func _trim_excess_effects() -> void:
+	while _effects.size() >= MAX_ACTIVE_EFFECTS:
+		var oldest: Dictionary = _effects[0]
+		var node := oldest.get("node") as Node3D
+		if is_instance_valid(node):
+			node.queue_free()
+		_effects.remove_at(0)
+
 
 func clear_all() -> void:
 	for fx: Dictionary in _effects:
@@ -46,6 +85,7 @@ func clear_all() -> void:
 
 func spawn_meteor_explosion(world_pos: Vector3, base_radius: float, glow_col: Color, is_bomb: bool = false) -> void:
 	_ensure_meshes()
+	_trim_excess_effects()
 
 	# 1. Компактная яркая вспышка в центре взрыва
 	var flash_inst := MeshInstance3D.new()
@@ -97,16 +137,14 @@ func spawn_meteor_explosion(world_pos: Vector3, base_radius: float, glow_col: Co
 		"end_scale": base_radius * (2.1 if is_bomb else 1.35)
 	})
 
-	# 3. Разлетающиеся в 3D каменные осколки метеорита
-	var shard_count: int = 9 if is_bomb else 6
+	# 3. Разлетающиеся в 3D каменные осколки метеорита (используют общий кэшированный материал!)
+	var shared_shard_mat: StandardMaterial3D = _pick_shard_material(glow_col)
+	var shard_count: int = 8 if is_bomb else 5
 	for i: int in range(shard_count):
+		_trim_excess_effects()
 		var shard := MeshInstance3D.new()
 		shard.mesh = SpaceEntity3D.get_shared_rock_mesh(i)
-		var shard_mat := StandardMaterial3D.new()
-		shard_mat.albedo_color = glow_col.lerp(Color(0.38, 0.34, 0.32), 0.60)
-		shard_mat.emission_enabled = true
-		shard_mat.emission = glow_col * 0.65
-		shard.material_override = shard_mat
+		shard.material_override = shared_shard_mat
 		shard.position = world_pos
 		var shard_s: float = clampf(base_radius * randf_range(0.18, 0.34), 0.16, 0.68)
 		shard.scale = Vector3.ONE * shard_s
@@ -132,6 +170,7 @@ func spawn_meteor_explosion(world_pos: Vector3, base_radius: float, glow_col: Co
 
 func spawn_hit_spark(world_pos: Vector3, col: Color) -> void:
 	_ensure_meshes()
+	_trim_excess_effects()
 	var spark := MeshInstance3D.new()
 	spark.mesh = _sphere_mesh
 	var mat := StandardMaterial3D.new()
