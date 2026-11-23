@@ -11,12 +11,14 @@ var _effects: Array[Dictionary] = []
 
 static var _sphere_mesh: SphereMesh
 static var _ring_mesh: TorusMesh
+static var _arc_cyl_mesh: CylinderMesh
 static var _shard_materials: Array[StandardMaterial3D] = []
 
 
 static func clear_static_caches() -> void:
 	_sphere_mesh = null
 	_ring_mesh = null
+	_arc_cyl_mesh = null
 	_shard_materials.clear()
 
 
@@ -38,6 +40,12 @@ static func _ensure_meshes() -> void:
 	_ring_mesh.outer_radius = 1.0
 	_ring_mesh.rings = 20
 	_ring_mesh.ring_segments = 8
+
+	_arc_cyl_mesh = CylinderMesh.new()
+	_arc_cyl_mesh.top_radius = 0.08
+	_arc_cyl_mesh.bottom_radius = 0.08
+	_arc_cyl_mesh.height = 1.0
+	_arc_cyl_mesh.radial_segments = 6
 
 	_shard_materials.clear()
 	var shard_tints: Array[Color] = [
@@ -195,6 +203,71 @@ func spawn_hit_spark(world_pos: Vector3, col: Color) -> void:
 	})
 
 
+## 3D-дуга молнии между глайдером и объектом при манёвре «На грани» или цепном 3D-лазере
+func spawn_graze_arc(from_pos: Vector3, to_pos: Vector3, col: Color = Color(0.28, 0.96, 1.0)) -> void:
+	_ensure_meshes()
+	_trim_excess_effects()
+	var diff: Vector3 = to_pos - from_pos
+	var dist: float = diff.length()
+	if dist < 0.2:
+		return
+
+	var arc := MeshInstance3D.new()
+	arc.mesh = _arc_cyl_mesh
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.albedo_color = col
+	arc.material_override = mat
+	add_child(arc)
+
+	arc.global_position = from_pos + diff * 0.5
+	var dir: Vector3 = diff / dist
+	var up_ref: Vector3 = Vector3.RIGHT if absf(dir.dot(Vector3.UP)) > 0.95 else Vector3.UP
+	var x_axis: Vector3 = up_ref.cross(dir).normalized()
+	var z_axis: Vector3 = dir.cross(x_axis).normalized()
+	arc.global_transform.basis = Basis(x_axis, dir * dist, z_axis)
+
+	_effects.append({
+		"type": "arc_fade",
+		"node": arc,
+		"mat": mat,
+		"color": col,
+		"age": 0.0,
+		"duration": 0.20
+	})
+
+
+## 3D-кольцо реактивного плазменного следа позади сопел глайдера
+func spawn_engine_wake_ring(world_pos: Vector3, col: Color) -> void:
+	_ensure_meshes()
+	_trim_excess_effects()
+	var wake := MeshInstance3D.new()
+	wake.mesh = _ring_mesh
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.albedo_color = Color(col.r, col.g, col.b, 0.45)
+	wake.material_override = mat
+	wake.position = world_pos
+	wake.rotation_degrees = Vector3(90.0, 0.0, 0.0)
+	wake.scale = Vector3.ONE * 0.42
+	add_child(wake)
+
+	_effects.append({
+		"type": "wake_ring",
+		"node": wake,
+		"mat": mat,
+		"color": col,
+		"age": 0.0,
+		"duration": 0.34,
+		"start_scale": 0.42,
+		"end_scale": 0.95
+	})
+
+
 func update_effects(delta: float) -> void:
 	var i: int = _effects.size() - 1
 	while i >= 0:
@@ -231,5 +304,18 @@ func update_effects(delta: float) -> void:
 			node.rotation += rot * delta
 			var s_deb: float = float(fx["start_scale"]) * (1.0 - t * 0.85)
 			node.scale = Vector3.ONE * maxf(0.02, s_deb)
+		elif fx_type == "arc_fade":
+			var mat_a := fx.get("mat") as StandardMaterial3D
+			if mat_a != null:
+				var ca: Color = fx["color"]
+				mat_a.albedo_color = Color(ca.r, ca.g, ca.b, (1.0 - t) * 0.92)
+		elif fx_type == "wake_ring":
+			node.position.z += 26.0 * delta
+			var sw: float = lerpf(float(fx["start_scale"]), float(fx["end_scale"]), t)
+			node.scale = Vector3.ONE * sw
+			var mat_w := fx.get("mat") as StandardMaterial3D
+			if mat_w != null:
+				var cw: Color = fx["color"]
+				mat_w.albedo_color = Color(cw.r, cw.g, cw.b, (1.0 - t) * 0.45)
 
 		i -= 1

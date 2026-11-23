@@ -544,7 +544,7 @@ func update_target_lock(has_target: bool, target_world_pos: Vector3, delta: floa
 		_reticle_mat.albedo_color = Color(0.22, 0.96, 1.0, 0.38)
 
 
-func show_quantum_laser(target_world_pos: Vector3) -> void:
+func show_quantum_laser(target_world_pos: Vector3, is_overdrive: bool = false) -> void:
 	if _laser_beam_mesh == null:
 		return
 	var start_pos: Vector3 = global_position + Vector3(0.0, 0.05, -2.2)
@@ -555,6 +555,8 @@ func show_quantum_laser(target_world_pos: Vector3) -> void:
 		return
 
 	_laser_beam_mesh.visible = true
+	if _laser_beam_mat != null:
+		_laser_beam_mat.albedo_color = Color(1.0, 0.42, 0.95, 0.86) if is_overdrive else Color(0.22, 0.96, 1.0, 0.78)
 	var mid_pos: Vector3 = start_pos + diff * 0.5
 	_laser_beam_mesh.global_position = mid_pos
 

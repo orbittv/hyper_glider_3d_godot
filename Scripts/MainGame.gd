@@ -41,6 +41,9 @@ var _wave_timer: float = 0.0
 var _wave_duration: float = 26.0
 var _shields: int = 3
 var _max_shields: int = 3
+var _graze_shield_progress: int = 0
+var _slowmo_timer: float = 0.0
+var _wake_ring_timer: float = 0.0
 var _combo: int = 1
 var _combo_timer: float = 0.0
 
@@ -68,6 +71,8 @@ var _cam_shake: float = 0.0
 var _cam_current_fov: float = 66.0
 var _screen_flash_alpha: float = 0.0
 var _screen_flash_color: Color = Color(0.25, 0.95, 1.0)
+var _edge_flash_alpha: float = 0.0
+var _edge_flash_color: Color = Color(0.25, 0.95, 1.0)
 
 # Тач / мышь управление в 3D
 var _is_dragging: bool = false
@@ -78,6 +83,7 @@ var _active_touches: Dictionary = {}
 var _ui_layer: CanvasLayer
 var _ui_root: Control
 var _flash_rect: ColorRect
+var _edge_flash_panel: Panel
 var _floating_texts_root: Control
 var _floating_labels: Array[Dictionary] = []
 var _modal_cards: Array[Dictionary] = []
@@ -90,6 +96,8 @@ var _lbl_score: Label
 var _lbl_wave: Label
 var _lbl_sector: Label
 var _lbl_shields: Label
+var _shield_dots: Array[ColorRect] = []
+var _lbl_graze_progress: Label
 var _lbl_combo: Label
 var _lbl_banner: Label
 var _banner_timer: float = 0.0
@@ -214,6 +222,7 @@ func _exit_tree() -> void:
 	_hangar_rows.clear()
 	_slot_panels.clear()
 	_slot_labels.clear()
+	_shield_dots.clear()
 	UiBuilder.clear_static_caches()
 	WeaponProjectile3D.clear_static_caches()
 	SpaceEntity3D.clear_static_caches()
@@ -325,12 +334,25 @@ func _set_glider_target_from_screen(screen_pos: Vector2) -> void:
 
 
 func _process(delta: float) -> void:
-	var dt: float = minf(delta, 0.05)
+	var raw_dt: float = minf(delta, 0.05)
+	if _slowmo_timer > 0.0:
+		_slowmo_timer -= raw_dt
+		if _slowmo_timer <= 0.0:
+			Engine.time_scale = 1.0
+	var dt: float = raw_dt
 
 	if _screen_flash_alpha > 0.0:
 		_screen_flash_alpha = maxf(0.0, _screen_flash_alpha - dt * 2.2)
 		if _flash_rect != null:
 			_flash_rect.color = Color(_screen_flash_color.r, _screen_flash_color.g, _screen_flash_color.b, _screen_flash_alpha)
+
+	if _edge_flash_alpha > 0.0:
+		_edge_flash_alpha = maxf(0.0, _edge_flash_alpha - dt * 2.6)
+		if _edge_flash_panel != null:
+			_edge_flash_panel.visible = _edge_flash_alpha > 0.01
+			var esb := _edge_flash_panel.get_theme_stylebox("panel") as StyleBoxFlat
+			if esb != null:
+				esb.border_color = Color(_edge_flash_color.r, _edge_flash_color.g, _edge_flash_color.b, _edge_flash_alpha)
 
 	_update_floating_labels(dt)
 
@@ -417,6 +439,13 @@ func _update_gameplay_3d(delta: float) -> void:
 		is_overdrive,
 		_shields
 	)
+
+	# 3D-кольца реактивного плазменного следа позади сопел глайдера при манёврах или Гиперскорости
+	_wake_ring_timer -= delta
+	if _wake_ring_timer <= 0.0 and (_glider.current_vel.length() > 3.5 or is_hyper or is_tunnel):
+		_wake_ring_timer = 0.09 if (is_hyper or is_tunnel) else 0.16
+		var wake_col: Color = Color(0.32, 1.0, 0.78) if (is_hyper or is_tunnel) else Color(0.18, 0.88, 1.0)
+		_fx3d.spawn_engine_wake_ring(_glider.global_position + Vector3(0.0, 0.0, 2.2), wake_col)
 
 	_update_camera_3d(delta, is_hyper, is_tunnel)
 	_env3d.update_environment(delta, current_forward_speed, is_hyper, is_tunnel)
@@ -556,15 +585,22 @@ func _update_weapons_3d(delta: float, is_overdrive: bool) -> void:
 				)
 			_audio.play_bullet_fire()
 
-	# 4. Квантовый 3D-Лазер (непрерывный прожигающий луч по ближайшему метеориту по курсу)
+	# 4. Квантовый 3D-Лазер (непрерывный прожигающий луч по ближайшему метеориту по курсу + цепной разряд в OVERDRIVE!)
 	if _timer_laser > 0.0:
 		var laser_target: SpaceEntity3D = _find_best_meteor_target(48.0, 7.5)
 		if laser_target != null:
-			_glider.show_quantum_laser(laser_target.global_position)
+			_glider.show_quantum_laser(laser_target.global_position, is_overdrive)
 			_audio.play_laser_hum()
 			var laser_dps: float = (95.0 + dmg_bonus * 2.2) * fire_rate_mult
 			if randf() < 0.35:
-				_fx3d.spawn_hit_spark(laser_target.global_position, Color(0.25, 0.96, 1.0))
+				_fx3d.spawn_hit_spark(laser_target.global_position, Color(1.0, 0.45, 0.96) if is_overdrive else Color(0.25, 0.96, 1.0))
+			if is_overdrive:
+				var chain_target: SpaceEntity3D = _find_chain_laser_target(laser_target, 10.5)
+				if chain_target != null:
+					if randf() < 0.35:
+						_fx3d.spawn_graze_arc(laser_target.global_position, chain_target.global_position, Color(1.0, 0.45, 0.96))
+					if chain_target.apply_damage(laser_dps * 0.55 * delta):
+						_on_meteor_destroyed(chain_target)
 			if laser_target.apply_damage(laser_dps * delta):
 				_on_meteor_destroyed(laser_target)
 		else:
@@ -632,6 +668,23 @@ func _find_best_meteor_target(max_dist_z: float, max_xy_offset: float) -> SpaceE
 		var score_val: float = dz + dxy * 2.4 - (12.0 if ent.is_enemy_ship() else 0.0)
 		if score_val < best_score:
 			best_score = score_val
+			best = ent
+	return best
+
+
+func _find_chain_laser_target(primary: SpaceEntity3D, max_chain_dist: float) -> SpaceEntity3D:
+	if primary == null:
+		return null
+	var best: SpaceEntity3D = null
+	var best_d: float = max_chain_dist
+	var p_pos: Vector3 = primary.global_position
+	for child: Node in _entities_root.get_children():
+		var ent := child as SpaceEntity3D
+		if ent == null or ent == primary or not ent.is_hostile() or ent.is_destroyed or ent.is_queued_for_deletion():
+			continue
+		var d: float = p_pos.distance_to(ent.global_position)
+		if d < best_d:
+			best_d = d
 			best = ent
 	return best
 
@@ -823,13 +876,38 @@ func _update_entities_3d(delta: float, speed_mult: float, is_invulnerable_warp: 
 					_on_glider_hit_meteor(ent)
 			elif not ent.grazed and absf(ent.global_position.z - g_pos.z) < 2.2 and dist <= ent.radius + graze_r:
 				ent.grazed = true
-				_combo = mini(_combo + 1, 8)
-				_combo_timer = 4.5
-				var graze_pts: int = 35 * _combo
-				_score += graze_pts
-				_add_hyper_charge(4.5)
-				_audio.play_graze(_combo)
-				_spawn_floating_3d_text(ent.global_position, "ВИРАЖ x%d +%d" % [_combo, graze_pts], Color(0.35, 0.98, 1.0))
+				_trigger_graze_bonus(ent.global_position)
+
+
+func _trigger_graze_bonus(threat_pos: Vector3) -> void:
+	var g_pos: Vector3 = _glider.global_position
+	_combo = mini(_combo + 1, 8)
+	_combo_timer = 4.5
+	var graze_pts: int = 45 * _combo
+	_score += graze_pts
+	_add_hyper_charge(5.5)
+	_audio.play_graze(_combo)
+	_fx3d.spawn_graze_arc(g_pos, threat_pos, Color(0.28, 0.96, 1.0))
+	_trigger_edge_flash(Color(0.22, 0.92, 1.0), 0.52)
+
+	# Короткий сочный микро-слоумо «На грани»
+	Engine.time_scale = 0.50
+	_slowmo_timer = 0.045
+
+	_graze_shield_progress += 1
+	if _graze_shield_progress >= 5:
+		_graze_shield_progress = 0
+		_audio.play_shield_restore()
+		_glider.trigger_shield_flash(false)
+		_trigger_edge_flash(Color(0.24, 1.0, 0.72), 0.72)
+		if _shields < _max_shields:
+			_shields += 1
+			_spawn_floating_3d_text(g_pos + Vector3(0.0, 1.2, 0.0), "5/5 НА ГРАНИ -> +1 ЩИТ!", Color(0.28, 1.0, 0.72))
+		else:
+			_score += 250
+			_spawn_floating_3d_text(g_pos + Vector3(0.0, 1.2, 0.0), "СВЕРХЗАРЯД ЩИТА +250!", Color(1.0, 0.88, 0.30))
+	else:
+		_spawn_floating_3d_text(threat_pos, "НА ГРАНИ x%d +%d" % [_combo, graze_pts], Color(0.35, 0.98, 1.0))
 
 
 func _fire_enemy_weapons_3d(ent: SpaceEntity3D) -> void:
@@ -1026,6 +1104,17 @@ func _trigger_screen_flash(col: Color, alpha: float) -> void:
 	_screen_flash_alpha = alpha
 	if _flash_rect != null:
 		_flash_rect.color = Color(col.r, col.g, col.b, alpha)
+	_trigger_edge_flash(col, minf(0.92, alpha * 1.65))
+
+
+func _trigger_edge_flash(col: Color, alpha: float) -> void:
+	_edge_flash_color = col
+	_edge_flash_alpha = alpha
+	if _edge_flash_panel != null:
+		_edge_flash_panel.visible = true
+		var esb := _edge_flash_panel.get_theme_stylebox("panel") as StyleBoxFlat
+		if esb != null:
+			esb.border_color = Color(col.r, col.g, col.b, alpha)
 
 
 func _show_banner(text: String, col: Color, duration: float = 2.5) -> void:
@@ -1122,6 +1211,10 @@ func _start_new_run() -> void:
 	_wave_timer = 0.0
 	_max_shields = _config.get_max_shields()
 	_shields = _max_shields
+	_graze_shield_progress = 0
+	_slowmo_timer = 0.0
+	Engine.time_scale = 1.0
+	_active_boss = null
 	_combo = 1
 	_combo_timer = 0.0
 	_hyper_charge = 0.0
@@ -1208,6 +1301,18 @@ func _build_all_ui() -> void:
 	_flash_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_flash_rect.color = Color(0.0, 0.0, 0.0, 0.0)
 	_ui_root.add_child(_flash_rect)
+
+	_edge_flash_panel = Panel.new()
+	_edge_flash_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_edge_flash_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_edge_flash_panel.visible = false
+	var edge_sb := StyleBoxFlat.new()
+	edge_sb.bg_color = Color(0.0, 0.0, 0.0, 0.0)
+	edge_sb.border_color = Color(0.22, 0.92, 1.0, 0.85)
+	edge_sb.set_border_width_all(10)
+	edge_sb.border_blend = true
+	_edge_flash_panel.add_theme_stylebox_override("panel", edge_sb)
+	_ui_root.add_child(_edge_flash_panel)
 
 	_build_hud_ui()
 	_build_menu_overlay()
@@ -1300,8 +1405,24 @@ func _build_hud_ui() -> void:
 	_lbl_score = UiBuilder.create_label("СЧЁТ: 0", 18, Color(0.92, 0.99, 1.0), HORIZONTAL_ALIGNMENT_LEFT, 2)
 	left_vbox.add_child(_lbl_score)
 
-	_lbl_shields = UiBuilder.create_label("ЩИТ: ● ● ●", 13, Color(0.25, 1.0, 0.75), HORIZONTAL_ALIGNMENT_LEFT)
-	left_vbox.add_child(_lbl_shields)
+	# Неоновые ячейки Грави-Щита (ColorRect вместо спецсимволов шрифта) + прогресс манёвра «На грани»
+	var shield_row := HBoxContainer.new()
+	shield_row.add_theme_constant_override("separation", 5)
+	left_vbox.add_child(shield_row)
+
+	_lbl_shields = UiBuilder.create_label("ЩИТ:", 12, Color(0.25, 1.0, 0.75), HORIZONTAL_ALIGNMENT_LEFT)
+	shield_row.add_child(_lbl_shields)
+
+	_shield_dots.clear()
+	for i: int in range(5):
+		var dot := ColorRect.new()
+		dot.custom_minimum_size = Vector2(13.0, 11.0)
+		dot.color = Color(0.22, 0.96, 0.76, 1.0)
+		shield_row.add_child(dot)
+		_shield_dots.append(dot)
+
+	_lbl_graze_progress = UiBuilder.create_label(" • 0/5", 11, Color(0.56, 0.88, 1.0), HORIZONTAL_ALIGNMENT_LEFT)
+	shield_row.add_child(_lbl_graze_progress)
 
 	var mid_vbox := VBoxContainer.new()
 	mid_vbox.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -1449,10 +1570,16 @@ func _update_hud_ui() -> void:
 	_lbl_wave.text = "ВОЛНА %d" % _wave
 	_lbl_combo.text = "КОМБО x%d" % _combo
 
-	var shield_dots: String = ""
-	for i: int in range(_max_shields):
-		shield_dots += "● " if i < _shields else "○ "
-	_lbl_shields.text = "ЩИТ: " + shield_dots.strip_edges()
+	for i: int in range(_shield_dots.size()):
+		var dot: ColorRect = _shield_dots[i]
+		dot.visible = i < _max_shields
+		if i < _shields:
+			dot.color = Color(0.22, 0.98, 0.76, 1.0)
+		else:
+			dot.color = Color(0.12, 0.24, 0.34, 0.65)
+
+	if _lbl_graze_progress != null:
+		_lbl_graze_progress.text = " • ГРАНЬ %d/5" % _graze_shield_progress
 
 	if _tunnel_timer > 0.0:
 		_lbl_sector.text = "3D ГИПЕР-ТУННЕЛЬ ЧЁРНОЙ ДЫРЫ: %.1f СЕК" % _tunnel_timer
@@ -1768,6 +1895,18 @@ func _build_hangar_overlay() -> void:
 		lbl_d.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		info_vbox.add_child(lbl_d)
 
+		# 5 неоновых индикаторов уровня апгрейда (ColorRect)
+		var pips_hbox := HBoxContainer.new()
+		pips_hbox.add_theme_constant_override("separation", 5)
+		info_vbox.add_child(pips_hbox)
+		var level_pips: Array[ColorRect] = []
+		for p_i: int in range(GameConfig.MAX_UPGRADE_LEVEL):
+			var pip := ColorRect.new()
+			pip.custom_minimum_size = Vector2(22.0, 7.0)
+			pip.color = Color(0.12, 0.24, 0.36, 0.75)
+			pips_hbox.add_child(pip)
+			level_pips.append(pip)
+
 		var key_str: String = String(def["key"])
 		var btn_buy := UiBuilder.create_primary_button("КУПИТЬ", 44.0, 14)
 		btn_buy.custom_minimum_size = Vector2(132.0, 44.0)
@@ -1786,7 +1925,8 @@ func _build_hangar_overlay() -> void:
 			"key": key_str,
 			"base_title": String(def["title"]),
 			"lbl_title": lbl_t,
-			"btn_buy": btn_buy
+			"btn_buy": btn_buy,
+			"pips": level_pips
 		})
 
 	var btn_refund := UiBuilder.create_danger_button("СБРОСИТЬ И ВЕРНУТЬ КРЕДИТЫ", 46.0, 15)
@@ -1814,6 +1954,14 @@ func _refresh_hangar_ui() -> void:
 		var lvl: int = _config.get_upgrade_level(key_str)
 		var lbl_t := row["lbl_title"] as Label
 		var btn_b := row["btn_buy"] as Button
+		var pips: Array = row.get("pips", [])
+		for p_i: int in range(pips.size()):
+			var pip := pips[p_i] as ColorRect
+			if pip != null:
+				if p_i < lvl:
+					pip.color = Color(0.28, 0.98, 0.78, 1.0) if lvl < GameConfig.MAX_UPGRADE_LEVEL else Color(1.0, 0.86, 0.28, 1.0)
+				else:
+					pip.color = Color(0.10, 0.22, 0.34, 0.70)
 		lbl_t.text = "%s [УР. %d/%d]" % [String(row["base_title"]), lvl, GameConfig.MAX_UPGRADE_LEVEL]
 		if lvl >= GameConfig.MAX_UPGRADE_LEVEL:
 			btn_b.text = "МАКСИМУМ"
