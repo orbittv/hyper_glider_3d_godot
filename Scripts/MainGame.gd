@@ -48,6 +48,7 @@ var _wake_ring_timer: float = 0.0
 var _wingtip_trail_timer: float = 0.0
 var _prev_wingtips: Array[Vector3] = []
 var _last_tap_msec: int = 0
+var _last_back_msec: int = -10000
 var _last_tap_pos: Vector2 = Vector2.ZERO
 var _combo: int = 1
 var _combo_timer: float = 0.0
@@ -214,11 +215,39 @@ func _handle_back_navigation() -> void:
 		return
 	if _state == GameState.PLAYING:
 		_toggle_pause(true)
+		_last_back_msec = Time.get_ticks_msec()
+		_show_exit_hint()
 	elif _state == GameState.PAUSED:
-		_toggle_pause(false)
+		_try_back_exit()
 	elif _state == GameState.GAME_OVER:
 		_audio.play_ui_click()
 		_enter_menu_state()
+	elif _state == GameState.MENU:
+		_try_back_exit()
+
+
+## Двойное нажатие «Назад» (в течение 2 сек) закрывает игру
+func _try_back_exit() -> void:
+	var now_msec: int = Time.get_ticks_msec()
+	if now_msec - _last_back_msec <= 2000:
+		_bank_uncommitted_credits()
+		if _config != null:
+			_config.save_data()
+		get_tree().quit()
+		return
+	_last_back_msec = now_msec
+	_show_exit_hint()
+
+
+func _show_exit_hint() -> void:
+	if _floating_texts_root == null:
+		return
+	var lbl := UiBuilder.create_label("Нажмите «Назад» ещё раз для выхода", 16, Color(1.0, 0.92, 0.55), HORIZONTAL_ALIGNMENT_CENTER, 4)
+	lbl.position = Vector2(20.0, _view_h - 120.0)
+	lbl.custom_minimum_size = Vector2(_view_w - 40.0, 28.0)
+	lbl.size = Vector2(_view_w - 40.0, 28.0)
+	_floating_texts_root.add_child(lbl)
+	_floating_labels.append({"label": lbl, "age": 0.0, "duration": 1.8, "color": Color(1.0, 0.92, 0.55), "static": true})
 
 
 func _exit_tree() -> void:
@@ -1261,7 +1290,8 @@ func _update_floating_labels(delta: float) -> void:
 			i -= 1
 			continue
 		item["age"] = age
-		lbl.position.y -= 38.0 * delta
+		if not bool(item.get("static", false)):
+			lbl.position.y -= 38.0 * delta
 		lbl.modulate = Color(1.0, 1.0, 1.0, 1.0 - (age / dur))
 		i -= 1
 
