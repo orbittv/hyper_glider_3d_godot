@@ -124,6 +124,7 @@ var _btn_mode_arcade: Button
 var _btn_mode_assault: Button
 var _btn_wave_prev: Button
 var _btn_wave_next: Button
+var _btn_start_launch: Button
 var _lbl_start_wave: Label
 
 var _pause_overlay: Control
@@ -480,6 +481,15 @@ func _update_menu_demo_3d(delta: float) -> void:
 	_env3d.update_environment(delta, 38.0, false, false)
 	_fx3d.update_effects(delta)
 	_update_camera_3d(delta, false, false)
+
+	# Едва заметное «дыхание» свечения рамки и внешнего ореола кнопки «ВЗЛЁТ В 3D-КОСМОС»
+	if _btn_start_launch != null:
+		var breath: float = 0.5 + 0.5 * sin(t * 2.2)
+		var sb := _btn_start_launch.get_theme_stylebox("normal") as StyleBoxFlat
+		if sb != null:
+			sb.border_color = Color(0.28, 0.95, 0.84, 0.88).lerp(Color(0.65, 1.0, 1.0, 1.0), breath)
+			sb.shadow_color = Color(0.04, 0.94, 0.82, lerpf(0.28, 0.48, breath))
+			sb.shadow_size = int(round(lerpf(11.0, 16.0, breath)))
 
 
 func _update_gameplay_3d(delta: float) -> void:
@@ -1900,9 +1910,9 @@ func _build_menu_overlay() -> void:
 	)
 	wave_hbox.add_child(_btn_wave_next)
 
-	var btn_start := UiBuilder.create_primary_button("ВЗЛЁТ В 3D-КОСМОС", 62.0, 21)
-	btn_start.pressed.connect(_start_new_run)
-	vbox.add_child(btn_start)
+	_btn_start_launch = UiBuilder.create_launch_hero_button("ВЗЛЁТ В 3D-КОСМОС", 64.0, 22)
+	_btn_start_launch.pressed.connect(_start_new_run)
+	vbox.add_child(_btn_start_launch)
 
 	var btn_hangar := UiBuilder.create_secondary_button("АНГАР 3D-АПГРЕЙДОВ", 52.0, 17)
 	btn_hangar.pressed.connect(func() -> void:

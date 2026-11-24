@@ -104,6 +104,91 @@ static func create_primary_button(text: String, height: float = 60.0, font_size:
 	)
 
 
+## Акцентная главная кнопка «ВЗЛЁТ В 3D-КОСМОС»:
+## - Насыщенный неоновый градиент (бирюзово-изумрудный -> яркий циан) + мягкое внешнее свечение
+## - Диагональный световой луч + перелив букв слева направо раз в 2.4 сек с паузой
+## - Дыхание свечения рамки и лёгкий пружинный отклик при нажатии
+static func create_launch_hero_button(text: String, height: float = 64.0, font_size: int = 22) -> Button:
+	var btn := Button.new()
+	btn.text = ""
+	btn.custom_minimum_size = Vector2(0.0, height)
+	btn.focus_mode = Control.FOCUS_NONE
+
+	var sb_normal := StyleBoxFlat.new()
+	sb_normal.bg_color = Color(0.02, 0.56, 0.50, 0.25)
+	sb_normal.border_color = Color(0.42, 1.0, 0.94, 0.96)
+	sb_normal.set_border_width_all(2)
+	sb_normal.set_corner_radius_all(14)
+	sb_normal.shadow_color = Color(0.06, 0.96, 0.84, 0.40)
+	sb_normal.shadow_size = 13
+	sb_normal.shadow_offset = Vector2.ZERO
+	sb_normal.content_margin_left = 14.0
+	sb_normal.content_margin_right = 14.0
+	sb_normal.content_margin_top = 8.0
+	sb_normal.content_margin_bottom = 8.0
+
+	var sb_hover := sb_normal.duplicate() as StyleBoxFlat
+	sb_hover.border_color = Color(0.72, 1.0, 0.98, 1.0)
+	sb_hover.shadow_color = Color(0.12, 1.0, 0.90, 0.54)
+	sb_hover.shadow_size = 16
+
+	var sb_pressed := sb_normal.duplicate() as StyleBoxFlat
+	sb_pressed.border_color = Color.WHITE
+	sb_pressed.shadow_color = Color(0.28, 1.0, 0.95, 0.65)
+	sb_pressed.shadow_size = 18
+
+	btn.add_theme_stylebox_override("normal", sb_normal)
+	btn.add_theme_stylebox_override("hover", sb_hover)
+	btn.add_theme_stylebox_override("pressed", sb_pressed)
+
+	# 1. Шейдерный слой градиента (бирюзово-изумрудный -> циан) + диагональный световой луч
+	var bg_rect := ColorRect.new()
+	bg_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	bg_rect.offset_left = 2.0
+	bg_rect.offset_top = 2.0
+	bg_rect.offset_right = -2.0
+	bg_rect.offset_bottom = -2.0
+	bg_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var bg_mat := ShaderMaterial.new()
+	bg_mat.shader = load("res://Shaders/LaunchButtonShimmer.gdshader") as Shader
+	bg_rect.material = bg_mat
+	btn.add_child(bg_rect)
+
+	# 2. Надпись с шейдером перелива букв слева направо (раз в 2.4 сек с паузой)
+	var lbl := create_label(text, font_size, Color(0.95, 1.0, 1.0), HORIZONTAL_ALIGNMENT_CENTER, 3)
+	lbl.set_anchors_preset(Control.PRESET_FULL_RECT)
+	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var txt_mat := ShaderMaterial.new()
+	txt_mat.shader = load("res://Shaders/LaunchTextShimmer.gdshader") as Shader
+	lbl.material = txt_mat
+	btn.add_child(lbl)
+
+	btn.resized.connect(func() -> void:
+		btn.pivot_offset = btn.size * 0.5
+		var inner_sz := Vector2(maxf(1.0, btn.size.x - 4.0), maxf(1.0, btn.size.y - 4.0))
+		bg_mat.set_shader_parameter("rect_size", inner_sz)
+		txt_mat.set_shader_parameter("box_width", maxf(1.0, btn.size.x))
+	)
+
+	# 3. Лёгкий пружинный отклик при нажатии
+	btn.button_down.connect(func() -> void:
+		btn.pivot_offset = btn.size * 0.5
+		var tw := btn.create_tween()
+		tw.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		tw.tween_property(btn, "scale", Vector2(0.96, 0.94), 0.06)
+	)
+	btn.button_up.connect(func() -> void:
+		btn.pivot_offset = btn.size * 0.5
+		var tw := btn.create_tween()
+		tw.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		tw.tween_property(btn, "scale", Vector2(1.03, 1.04), 0.11)
+		tw.tween_property(btn, "scale", Vector2.ONE, 0.12)
+	)
+
+	return btn
+
+
 static func create_secondary_button(text: String, height: float = 54.0, font_size: int = 18) -> Button:
 	return create_neon_button(
 		text,
