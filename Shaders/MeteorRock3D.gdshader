@@ -9,6 +9,7 @@ uniform float metallic_val : hint_range(0.0, 1.0) = 0.15;
 uniform float roughness_val : hint_range(0.05, 1.0) = 0.82;
 
 varying vec3 v_local_pos;
+varying float v_radial_h;
 
 float hash31(vec3 p) {
 	p = fract(p * vec3(443.897, 441.423, 437.195));
@@ -37,11 +38,12 @@ float noise3(vec3 p) {
 
 void vertex() {
 	v_local_pos = VERTEX;
+	v_radial_h = length(VERTEX);
 }
 
 void fragment() {
 	// Рельефная окраска: впадины кратеров темнее, острые хребты светлее
-	float radial_h = length(v_local_pos);
+	float radial_h = v_radial_h;
 	float detail_n = noise3(v_local_pos * 4.5);
 	float ridge_t = smoothstep(0.84, 1.18, radial_h + (detail_n - 0.5) * 0.16);
 	vec3 rock_col = mix(base_rock_color * 0.55, ridge_color, ridge_t);

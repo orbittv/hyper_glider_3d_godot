@@ -781,8 +781,9 @@ func _update_weapons_3d(delta: float, is_overdrive: bool) -> void:
 					WeaponProjectile3D.Kind.PLASMA_BASE,
 					dm_pos,
 					Vector3(0.0, 0.0, -115.0),
-					dmg_bonus * 0.25 - 12.0 # итоговый урон дрона ~10..15 (поддержка, а не замена основному арсеналу)
+					0.0
 				)
+				dp.damage = 10.0 + float(_config.upg_wing_drones) * 1.5 + dmg_bonus * 0.25
 
 
 func _find_best_meteor_target(max_dist_z: float, max_xy_offset: float) -> SpaceEntity3D:
@@ -874,6 +875,8 @@ func _update_projectiles_3d(delta: float) -> void:
 			if ent == null or not ent.is_hostile() or ent.is_destroyed or ent.is_queued_for_deletion():
 				continue
 			var combined_r: float = proj.hit_radius + ent.radius
+			if absf(p_pos.z - ent.position.z) > combined_r + 0.5:
+				continue
 			if p_pos.distance_squared_to(ent.global_position) <= combined_r * combined_r:
 				hit_any = true
 				var spark_col := Color(0.28, 1.0, 0.62) if proj.kind == WeaponProjectile3D.Kind.PLASMA_HEAVY else Color(0.22, 0.94, 1.0)

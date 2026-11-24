@@ -670,12 +670,16 @@ func update_entity(delta: float, speed_mult: float, glider_pos: Vector3, magnet_
 		if _hit_flash_timer <= 0.0 and _rock_mesh_inst != null and _base_rock_mat != null:
 			_rock_mesh_inst.material_override = _base_rock_mat
 
-	# Магнитное притяжение сфер и бонусов к 3D-глайдеру
+	# Магнитное притяжение сфер и бонусов к 3D-глайдеру (у Квантовых Кристаллов увеличенный радиус захвата)
 	if is_pickup_orb():
+		if kind == Kind.ORB_QUANTUM_CRYSTAL:
+			velocity.x = move_toward(velocity.x, 0.0, 8.5 * delta)
+			velocity.y = move_toward(velocity.y, 0.0, 8.5 * delta)
+		var eff_magnet: float = magnet_radius * (1.28 if kind == Kind.ORB_QUANTUM_CRYSTAL else 1.0)
 		var to_glider: Vector3 = glider_pos - global_position
 		var dist: float = to_glider.length()
-		if dist < magnet_radius and dist > 0.05:
-			var pull_strength: float = lerpf(36.0, 12.0, clampf(dist / magnet_radius, 0.0, 1.0))
+		if dist < eff_magnet and dist > 0.05:
+			var pull_strength: float = lerpf(38.0, 14.0, clampf(dist / eff_magnet, 0.0, 1.0))
 			position += to_glider.normalized() * pull_strength * delta
 
 	# Притяжение самого глайдера или визуальное вращение для Чёрной дыры
@@ -712,13 +716,16 @@ func update_entity(delta: float, speed_mult: float, glider_pos: Vector3, magnet_
 	position.y += velocity.y * delta
 	position.z += velocity.z * speed_mult * delta
 
-	# Мягкое отражение от границ коридора полёта по X и Y
-	if absf(position.x) > 9.5:
-		position.x = clampf(position.x, -9.5, 9.5)
-		velocity.x = -velocity.x
-	if position.y < -6.5 or position.y > 7.5:
-		position.y = clampf(position.y, -6.5, 7.5)
-		velocity.y = -velocity.y
+	# Мягкое отражение от границ коридора полёта по X и Y (бонусы и кристаллы строго в пределах досягаемости глайдера!)
+	var max_x: float = 6.8 if is_pickup_orb() else 8.8
+	var min_y: float = -3.9 if is_pickup_orb() else -5.5
+	var max_y: float = 3.5 if is_pickup_orb() else 6.0
+	if absf(position.x) > max_x:
+		position.x = clampf(position.x, -max_x, max_x)
+		velocity.x = -velocity.x * (0.5 if is_pickup_orb() else 1.0)
+	if position.y < min_y or position.y > max_y:
+		position.y = clampf(position.y, min_y, max_y)
+		velocity.y = -velocity.y * (0.5 if is_pickup_orb() else 1.0)
 
 	if _visual_root != null:
 		if is_meteor():
