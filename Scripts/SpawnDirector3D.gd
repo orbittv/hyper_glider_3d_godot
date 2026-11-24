@@ -254,6 +254,8 @@ func _update_tunnel_spawns(delta: float, entities_root: Node3D, forward_speed: f
 		kind = _pick_weapon_or_hyper_kind()
 	elif r < 0.34:
 		kind = SpaceEntity3D.Kind.ORB_HYPER_CORE
+	elif r < 0.58:
+		kind = SpaceEntity3D.Kind.ORB_QUANTUM_CRYSTAL
 
 	var orb := SpaceEntity3D.new()
 	entities_root.add_child(orb)

@@ -36,6 +36,7 @@ var _projectiles_root: Node3D
 var _is_assault_mode: bool = false
 var _score: int = 0
 var _last_banked_score: int = 0
+var _run_crystals: int = 0
 var _wave: int = 1
 var _wave_timer: float = 0.0
 var _wave_duration: float = 26.0
@@ -187,11 +188,13 @@ func _notification(what: int) -> void:
 func _bank_uncommitted_credits() -> void:
 	if _config == null or _score <= _last_banked_score:
 		return
-	var diff_score: int = _score - _last_banked_score
-	_last_banked_score = _score
-	var added_credits: int = maxi(1, int(round(float(diff_score) * 0.25)))
-	_config.upgrade_points += added_credits
-	_config.save_data()
+	# Боевые очки конвертируются в Квантовые Кристаллы по курсу 1 КР за 1000 очков (остаток копится)
+	var whole: int = (_score - _last_banked_score) / GameConfig.SCORE_PER_BONUS_CRYSTAL
+	if whole <= 0:
+		return
+	_last_banked_score += whole * GameConfig.SCORE_PER_BONUS_CRYSTAL
+	_run_crystals += whole
+	_config.add_crystals(whole, true)
 
 
 func _close_all_modals() -> void:
@@ -683,7 +686,7 @@ func _update_weapons_3d(delta: float, is_overdrive: bool) -> void:
 	# 6. Крыльевые 3D-Дроны (апгрейд Ангара)
 	if _config.upg_wing_drones > 0:
 		_cd_drones -= delta
-		var drone_interval: float = maxf(0.24, 0.56 - float(_config.upg_wing_drones) * 0.06)
+		var drone_interval: float = maxf(0.40, 0.72 - float(_config.upg_wing_drones) * 0.06)
 		if _cd_drones <= 0.0:
 			_cd_drones = drone_interval
 			var d_muzzles: Array[Vector3] = _glider.get_drone_muzzle_positions()
@@ -694,7 +697,7 @@ func _update_weapons_3d(delta: float, is_overdrive: bool) -> void:
 					WeaponProjectile3D.Kind.PLASMA_BASE,
 					dm_pos,
 					Vector3(0.0, 0.0, -115.0),
-					dmg_bonus * 0.6
+					dmg_bonus * 0.25 - 12.0 # итоговый урон дрона ~10..15 (поддержка, а не замена основному арсеналу)
 				)
 
 
@@ -851,6 +854,7 @@ func _on_meteor_destroyed(ent: SpaceEntity3D) -> void:
 
 	if is_boss:
 		_audio.play_boss_explode()
+		_spawn_crystal_burst(pos, 6 + mini(_wave / 3, 6))
 		_cam_shake = 1.1
 		_trigger_screen_flash(Color(1.0, 0.32, 0.55), 0.48)
 		_show_banner(ent.boss_title + " УНИЧТОЖЕН! ОТКРЫТА 3D ЧЁРНАЯ ДЫРА!", Color(1.0, 0.88, 0.30), 3.4)
@@ -883,6 +887,14 @@ func _on_meteor_destroyed(ent: SpaceEntity3D) -> void:
 		if is_interceptor:
 			_spawn_floating_3d_text(pos, "+%d ПЕРЕХВАТЧИК!" % pts, exp_col)
 
+	# Квантовые Кристаллы: щедро из бомб и катеров, редко из кристаллических метеоритов
+	if is_interceptor and randf() < 0.55:
+		_spawn_crystal_burst(pos, 1 + (1 if randf() < 0.3 else 0))
+	elif is_bomb and randf() < 0.45:
+		_spawn_crystal_burst(pos, 1)
+	elif is_crystal and randf() < 0.30:
+		_spawn_crystal_burst(pos, 1)
+
 	# Из кристаллических метеоритов и сбитых 3D-перехватчиков выпадает сфера энергии или оружие!
 	if is_crystal or is_interceptor or (rad >= 2.2 and randf() < 0.35):
 		var drop := SpaceEntity3D.new()
@@ -891,6 +903,21 @@ func _on_meteor_destroyed(ent: SpaceEntity3D) -> void:
 		if (is_crystal or is_interceptor) and randf() < 0.55:
 			drop_kind = SpaceEntity3D.pick_random_weapon_orb_kind()
 		drop.setup_entity(drop_kind, pos, _base_forward_speed * 0.75, 1.15, _wave)
+
+
+func _spawn_crystal_burst(pos: Vector3, count: int) -> void:
+	for i: int in range(count):
+		var cr := SpaceEntity3D.new()
+		_entities_root.add_child(cr)
+		cr.setup_entity(
+			SpaceEntity3D.Kind.ORB_QUANTUM_CRYSTAL,
+			pos + Vector3(randf_range(-0.8, 0.8), randf_range(-0.6, 0.6), 0.0),
+			_base_forward_speed * 0.8,
+			1.0,
+			_wave
+		)
+		cr.velocity.x = randf_range(-5.0, 5.0)
+		cr.velocity.y = randf_range(-3.0, 4.0)
 
 
 func _update_entities_3d(delta: float, speed_mult: float, is_invulnerable_warp: bool) -> void:
@@ -1040,6 +1067,12 @@ func _collect_orb(ent: SpaceEntity3D) -> void:
 				_spawn_floating_3d_text(pos, "СВЕРХЗАРЯД ЭМИ +%d!" % emp_pts, Color(1.0, 0.88, 0.30))
 			_glider.trigger_shield_flash(false)
 			_audio.play_shield_restore()
+		SpaceEntity3D.Kind.ORB_QUANTUM_CRYSTAL:
+			_run_crystals += 1
+			_config.add_crystals(1)
+			_score += 60 * _combo
+			_audio.play_orb_pickup(true, _combo)
+			_spawn_floating_3d_text(pos, "+1 КР", Color(0.45, 0.95, 1.0))
 		SpaceEntity3D.Kind.ORB_WEAPON_PLASMA:
 			_timer_heavy_plasma = minf(38.0 * ammo_mult, _timer_heavy_plasma + 16.0 * ammo_mult)
 			_audio.play_weapon_pickup()
@@ -1273,6 +1306,7 @@ func _start_new_run() -> void:
 	_state = GameState.PLAYING
 	_score = 0
 	_last_banked_score = 0
+	_run_crystals = 0
 	_wave = _config.get_saved_wave(_is_assault_mode)
 	_wave_timer = 0.0
 	_max_shields = _config.get_max_shields()
@@ -1326,12 +1360,12 @@ func _trigger_game_over() -> void:
 	_glider.hide_quantum_laser()
 
 	var is_new_rec: bool = _config.register_run_result(_is_assault_mode, _score, _wave)
-	var prev_credits: int = _config.upgrade_points
 	_bank_uncommitted_credits()
-	var wave_bonus_credits: int = _wave * 65
-	_config.upgrade_points += wave_bonus_credits
+	var wave_bonus_crystals: int = maxi(1, _wave / 2)
+	_run_crystals += wave_bonus_crystals
+	_config.add_crystals(wave_bonus_crystals, true)
 	_config.save_data()
-	var earned_credits: int = _config.upgrade_points - prev_credits
+	var earned_credits: int = _run_crystals
 
 	var mode_title: String = "ГИПЕР-ШТУРМ 3D" if _is_assault_mode else "КОСМО-РЕЙД 3D"
 	var rec_tag: String = "\nНОВЫЙ РЕКОРД СЕКТОРА!" if is_new_rec else ""
@@ -1340,7 +1374,7 @@ func _trigger_game_over() -> void:
 		+ "СЧЁТ: %d%s\n" % [_score, rec_tag]
 		+ "ДОСТИГНУТА ВОЛНА: %d\n" % _wave
 		+ "ЛУЧШИЙ РЕКОРД: %d\n\n" % _config.get_high_score(_is_assault_mode)
-		+ "ПОЛУЧЕНО КРЕДИТОВ АНГАРА: +%d" % earned_credits
+		+ "СОБРАНО КВАНТОВЫХ КРИСТАЛЛОВ: +%d" % earned_credits
 	)
 	_gameover_overlay.visible = true
 
@@ -1639,7 +1673,7 @@ func _update_hud_ui() -> void:
 
 	_lbl_score.text = "СЧЁТ: %d" % _score
 	_lbl_wave.text = "ВОЛНА %d" % _wave
-	_lbl_combo.text = "КОМБО x%d" % _combo
+	_lbl_combo.text = "КОМБО x%d  •  %d КР" % [_combo, _run_crystals]
 
 	for i: int in range(_shield_dots.size()):
 		var dot: ColorRect = _shield_dots[i]
@@ -1825,7 +1859,7 @@ func _refresh_menu_ui() -> void:
 	var best_w: int = _config.get_best_wave(_is_assault_mode)
 	var saved_w: int = _config.get_saved_wave(_is_assault_mode)
 	_lbl_menu_records.text = "РЕКОРД: %d ОЧКОВ • ЛУЧШАЯ ВОЛНА: %d" % [rec, best_w]
-	_lbl_menu_credits.text = "КРЕДИТЫ АНГАРА: %d" % _config.upgrade_points
+	_lbl_menu_credits.text = "КВАНТОВЫЕ КРИСТАЛЛЫ: %d КР" % _config.quantum_crystals
 	_lbl_start_wave.text = "СТАРТ С ВОЛНЫ: %d / %d" % [saved_w, best_w]
 
 	if not _is_assault_mode:
@@ -1929,7 +1963,7 @@ func _build_hangar_overlay() -> void:
 
 	vbox.add_child(UiBuilder.create_label("АНГАР 3D-АПГРЕЙДОВ", 23, Color(0.38, 0.96, 1.0), HORIZONTAL_ALIGNMENT_CENTER, 3))
 
-	_lbl_hangar_credits = UiBuilder.create_label("КРЕДИТЫ: 1200", 17, Color(1.0, 0.86, 0.30), HORIZONTAL_ALIGNMENT_CENTER)
+	_lbl_hangar_credits = UiBuilder.create_label("КРИСТАЛЛЫ: 25 КР", 17, Color(1.0, 0.86, 0.30), HORIZONTAL_ALIGNMENT_CENTER)
 	vbox.add_child(_lbl_hangar_credits)
 
 	var upg_defs: Array[Dictionary] = [
@@ -2000,7 +2034,7 @@ func _build_hangar_overlay() -> void:
 			"pips": level_pips
 		})
 
-	var btn_refund := UiBuilder.create_danger_button("СБРОСИТЬ И ВЕРНУТЬ КРЕДИТЫ", 46.0, 15)
+	var btn_refund := UiBuilder.create_danger_button("СБРОСИТЬ И ВЕРНУТЬ КРИСТАЛЛЫ", 46.0, 15)
 	btn_refund.pressed.connect(func() -> void:
 		_audio.play_ui_click()
 		_config.refund_all_upgrades()
@@ -2019,7 +2053,7 @@ func _build_hangar_overlay() -> void:
 
 
 func _refresh_hangar_ui() -> void:
-	_lbl_hangar_credits.text = "ДОСТУПНО КРЕДИТОВ: %d" % _config.upgrade_points
+	_lbl_hangar_credits.text = "КВАНТОВЫХ КРИСТАЛЛОВ: %d КР" % _config.quantum_crystals
 	for row: Dictionary in _hangar_rows:
 		var key_str: String = String(row["key"])
 		var lvl: int = _config.get_upgrade_level(key_str)
@@ -2039,7 +2073,7 @@ func _refresh_hangar_ui() -> void:
 			UiBuilder.apply_button_colors(btn_b, Color(0.06, 0.34, 0.26, 0.90), Color(0.28, 0.95, 0.72, 0.85))
 		else:
 			var cost: int = _config.get_upgrade_cost(key_str)
-			btn_b.text = "+1 (%d)" % cost
+			btn_b.text = "+1 (%d КР)" % cost
 			if _config.can_buy_upgrade(key_str):
 				UiBuilder.apply_button_colors(btn_b, Color(0.05, 0.45, 0.68, 0.98), Color(0.38, 0.95, 1.0, 1.0))
 			else:

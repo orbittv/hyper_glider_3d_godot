@@ -7,7 +7,9 @@ extends RefCounted
 
 const SAVE_PATH: String = "user://hyper_glider_3d_save.cfg"
 const MAX_UPGRADE_LEVEL: int = 5
-const UPGRADE_COSTS: Array[int] = [500, 1200, 2200, 3600, 5500]
+const UPGRADE_COSTS: Array[int] = [40, 100, 220, 420, 750]
+const SCORE_PER_BONUS_CRYSTAL: int = 1000
+const DEFAULT_STARTING_CRYSTALS: int = 25
 
 var music_volume: float = 0.85
 var sfx_volume: float = 0.90
@@ -25,8 +27,8 @@ var best_wave_assault: int = 1
 var saved_wave_arcade: int = 1
 var saved_wave_assault: int = 1
 
-# Банк боевых кредитов и уровни 5 систем 3D-апгрейда глайдера (0 .. 5)
-var upgrade_points: int = 1200 # Стартовый бонус для первой покупки в Ангаре
+# Банк Квантовых Кристаллов и уровни 5 систем 3D-апгрейда глайдера (0 .. 5)
+var quantum_crystals: int = DEFAULT_STARTING_CRYSTALS # Стартовый запас кристаллов для первого улучшения в Ангаре
 var upg_wave_shield: int = 0 # 3D Грави-Щит (до 5 сфер щита + ударная волна при попадании)
 var upg_plasma_cannon: int = 0 # Плазменный Усилитель (+скорострельность и мощь базовой и тяжёлой плазмы)
 var upg_ammo_bay: int = 0 # Оружейный Отсек (+20%..+100% к длительности спецоружия и боезапасу ракет)
@@ -56,7 +58,14 @@ func load_data() -> void:
 	saved_wave_arcade = clampi(int(cfg.get_value("records", "saved_wave_arcade", best_wave_arcade)), 1, best_wave_arcade)
 	saved_wave_assault = clampi(int(cfg.get_value("records", "saved_wave_assault", best_wave_assault)), 1, best_wave_assault)
 
-	upgrade_points = maxi(0, int(cfg.get_value("upgrades", "upgrade_points", 1200)))
+	if cfg.has_section_key("upgrades", "quantum_crystals"):
+		quantum_crystals = maxi(0, int(cfg.get_value("upgrades", "quantum_crystals", DEFAULT_STARTING_CRYSTALS)))
+	elif cfg.has_section_key("upgrades", "upgrade_points"):
+		# Мягкая миграция со старой системы очков в Квантовые Кристаллы
+		var legacy_pts: int = maxi(0, int(cfg.get_value("upgrades", "upgrade_points", 0)))
+		quantum_crystals = clampi(legacy_pts / 25, DEFAULT_STARTING_CRYSTALS, 140)
+	else:
+		quantum_crystals = DEFAULT_STARTING_CRYSTALS
 	upg_wave_shield = clampi(int(cfg.get_value("upgrades", "upg_wave_shield", 0)), 0, MAX_UPGRADE_LEVEL)
 	upg_plasma_cannon = clampi(int(cfg.get_value("upgrades", "upg_plasma_cannon", 0)), 0, MAX_UPGRADE_LEVEL)
 	upg_ammo_bay = clampi(int(cfg.get_value("upgrades", "upg_ammo_bay", 0)), 0, MAX_UPGRADE_LEVEL)
@@ -82,7 +91,7 @@ func save_data() -> void:
 	cfg.set_value("records", "saved_wave_arcade", saved_wave_arcade)
 	cfg.set_value("records", "saved_wave_assault", saved_wave_assault)
 
-	cfg.set_value("upgrades", "upgrade_points", upgrade_points)
+	cfg.set_value("upgrades", "quantum_crystals", quantum_crystals)
 	cfg.set_value("upgrades", "upg_wave_shield", upg_wave_shield)
 	cfg.set_value("upgrades", "upg_plasma_cannon", upg_plasma_cannon)
 	cfg.set_value("upgrades", "upg_ammo_bay", upg_ammo_bay)
@@ -128,24 +137,32 @@ func get_upgrade_cost(key: String) -> int:
 	return UPGRADE_COSTS[lvl]
 
 
+func add_crystals(amount: int, save_now: bool = false) -> void:
+	if amount <= 0:
+		return
+	quantum_crystals += amount
+	if save_now:
+		save_data()
+
+
 func can_buy_upgrade(key: String) -> bool:
 	var lvl: int = get_upgrade_level(key)
 	if lvl >= MAX_UPGRADE_LEVEL:
 		return false
-	return upgrade_points >= get_upgrade_cost(key)
+	return quantum_crystals >= get_upgrade_cost(key)
 
 
 func buy_upgrade(key: String) -> bool:
 	if not can_buy_upgrade(key):
 		return false
 	var cost: int = get_upgrade_cost(key)
-	upgrade_points = maxi(0, upgrade_points - cost)
+	quantum_crystals = maxi(0, quantum_crystals - cost)
 	set_upgrade_level(key, get_upgrade_level(key) + 1)
 	save_data()
 	return true
 
 
-func get_total_spent_upgrade_points() -> int:
+func get_total_spent_crystals() -> int:
 	var total: int = 0
 	for key: String in ["wave_shield", "plasma_cannon", "ammo_bay", "wing_drones", "hyper_core"]:
 		var lvl: int = get_upgrade_level(key)
@@ -155,10 +172,10 @@ func get_total_spent_upgrade_points() -> int:
 
 
 func refund_all_upgrades() -> int:
-	var refunded: int = get_total_spent_upgrade_points()
+	var refunded: int = get_total_spent_crystals()
 	if refunded <= 0:
 		return 0
-	upgrade_points += refunded
+	quantum_crystals += refunded
 	upg_wave_shield = 0
 	upg_plasma_cannon = 0
 	upg_ammo_bay = 0

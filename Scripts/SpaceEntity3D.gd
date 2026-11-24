@@ -18,6 +18,7 @@ enum Kind {
 	ORB_WEAPON_VULCAN,
 	ORB_WEAPON_LASER,
 	ORB_WEAPON_MISSILE,
+	ORB_QUANTUM_CRYSTAL,
 	BLACK_HOLE_PORTAL,
 	ENEMY_INTERCEPTOR,
 	ENEMY_BOSS_3D
@@ -28,6 +29,7 @@ var radius: float = 1.6
 var max_hp: float = 40.0
 var hp: float = 40.0
 var score_value: int = 50
+var crystal_value: int = 1
 var velocity: Vector3 = Vector3(0.0, 0.0, 42.0)
 var rot_speed: Vector3 = Vector3(1.0, 1.4, 0.7)
 var grazed: bool = false
@@ -62,10 +64,13 @@ static var _mat_black_hole_disk: ShaderMaterial
 static var _mat_enemy_hull: StandardMaterial3D
 static var _mat_enemy_neon: StandardMaterial3D
 static var _mat_boss_core: StandardMaterial3D
+static var _mat_quantum_crystal: StandardMaterial3D
+static var _mat_quantum_crystal_halo: StandardMaterial3D
 static var _orb_materials: Dictionary = {}
 
 static var _orb_sphere_mesh: SphereMesh
 static var _orb_ring_mesh: TorusMesh
+static var _crystal_octa_mesh: ArrayMesh
 static var _bh_void_mesh: SphereMesh
 static var _bh_disk_mesh: QuadMesh
 static var _enemy_body_mesh: BoxMesh
@@ -99,8 +104,11 @@ static func clear_static_caches() -> void:
 	_mat_enemy_hull = null
 	_mat_enemy_neon = null
 	_mat_boss_core = null
+	_mat_quantum_crystal = null
+	_mat_quantum_crystal_halo = null
 	_orb_sphere_mesh = null
 	_orb_ring_mesh = null
+	_crystal_octa_mesh = null
 	_bh_void_mesh = null
 	_bh_disk_mesh = null
 	_enemy_body_mesh = null
@@ -235,6 +243,22 @@ static func _ensure_shared_assets() -> void:
 	_mat_boss_core.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
 	_mat_boss_core.albedo_color = Color(1.0, 0.26, 0.52, 0.90)
 
+	_crystal_octa_mesh = _generate_octahedron_crystal_mesh()
+
+	_mat_quantum_crystal = StandardMaterial3D.new()
+	_mat_quantum_crystal.albedo_color = Color(0.24, 0.94, 1.0, 0.95)
+	_mat_quantum_crystal.metallic = 0.75
+	_mat_quantum_crystal.roughness = 0.14
+	_mat_quantum_crystal.emission_enabled = true
+	_mat_quantum_crystal.emission = Color(0.32, 0.88, 1.0)
+	_mat_quantum_crystal.emission_energy_multiplier = 1.65
+
+	_mat_quantum_crystal_halo = StandardMaterial3D.new()
+	_mat_quantum_crystal_halo.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_mat_quantum_crystal_halo.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_mat_quantum_crystal_halo.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	_mat_quantum_crystal_halo.albedo_color = Color(0.55, 0.42, 1.0, 0.82)
+
 	var orb_colors: Dictionary = {
 		Kind.ORB_ENERGY: Color(0.20, 0.92, 1.0, 0.95),
 		Kind.ORB_HYPER_CORE: Color(0.95, 0.25, 1.0, 0.98),
@@ -242,7 +266,8 @@ static func _ensure_shared_assets() -> void:
 		Kind.ORB_WEAPON_PLASMA: Color(0.28, 1.0, 0.45, 0.98),
 		Kind.ORB_WEAPON_VULCAN: Color(1.0, 0.84, 0.22, 0.98),
 		Kind.ORB_WEAPON_LASER: Color(0.25, 0.96, 1.0, 0.98),
-		Kind.ORB_WEAPON_MISSILE: Color(1.0, 0.36, 0.28, 0.98)
+		Kind.ORB_WEAPON_MISSILE: Color(1.0, 0.36, 0.28, 0.98),
+		Kind.ORB_QUANTUM_CRYSTAL: Color(0.36, 0.96, 1.0, 0.98)
 	}
 	_orb_materials.clear()
 	for k: Kind in orb_colors.keys():
@@ -252,6 +277,38 @@ static func _ensure_shared_assets() -> void:
 		m.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
 		m.albedo_color = orb_colors[k]
 		_orb_materials[k] = m
+
+
+static func _generate_octahedron_crystal_mesh() -> ArrayMesh:
+	var top := Vector3(0.0, 0.88, 0.0)
+	var bot := Vector3(0.0, -0.88, 0.0)
+	var ring: Array[Vector3] = [
+		Vector3(0.56, 0.0, 0.0),
+		Vector3(0.0, 0.0, 0.56),
+		Vector3(-0.56, 0.0, 0.0),
+		Vector3(0.0, 0.0, -0.56)
+	]
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for i: int in range(4):
+		var a: Vector3 = ring[i]
+		var b: Vector3 = ring[(i + 1) % 4]
+		var n_top: Vector3 = (b - top).cross(a - top).normalized()
+		st.set_normal(n_top)
+		st.add_vertex(top)
+		st.set_normal(n_top)
+		st.add_vertex(a)
+		st.set_normal(n_top)
+		st.add_vertex(b)
+
+		var n_bot: Vector3 = (a - bot).cross(b - bot).normalized()
+		st.set_normal(n_bot)
+		st.add_vertex(bot)
+		st.set_normal(n_bot)
+		st.add_vertex(b)
+		st.set_normal(n_bot)
+		st.add_vertex(a)
+	return st.commit()
 
 
 static func _generate_procedural_asteroid_mesh(seed_val: int) -> ArrayMesh:
@@ -405,6 +462,11 @@ func setup_entity(
 			fire_interval = 1.45
 			fire_cooldown = 1.2
 			_build_boss_3d_visual()
+		Kind.ORB_QUANTUM_CRYSTAL:
+			radius = 1.0
+			velocity = Vector3(randf_range(-2.2, 2.2), randf_range(-1.6, 1.6), forward_vel_z * 0.9)
+			score_value = 60
+			_build_quantum_crystal_visual()
 		_:
 			radius = 1.15
 			velocity = Vector3(0.0, 0.0, forward_vel_z * 0.88)
@@ -457,6 +519,20 @@ func _build_orb_visual() -> void:
 	_ring_inst.rotation_degrees = Vector3(68.0, 0.0, 0.0)
 	_ring_inst.scale = Vector3.ONE * 1.25
 	_visual_root.add_child(_ring_inst)
+
+
+func _build_quantum_crystal_visual() -> void:
+	_plasma_core_inst = MeshInstance3D.new()
+	_plasma_core_inst.mesh = _crystal_octa_mesh
+	_plasma_core_inst.material_override = _mat_quantum_crystal
+	_plasma_core_inst.scale = Vector3.ONE * 0.95
+	_visual_root.add_child(_plasma_core_inst)
+
+	var halo := MeshInstance3D.new()
+	halo.mesh = _orb_sphere_mesh
+	halo.material_override = _mat_quantum_crystal_halo
+	halo.scale = Vector3.ONE * 1.05
+	_visual_root.add_child(halo)
 
 
 func _build_black_hole_visual() -> void:
@@ -566,6 +642,7 @@ func is_pickup_orb() -> bool:
 		or kind == Kind.ORB_WEAPON_VULCAN
 		or kind == Kind.ORB_WEAPON_LASER
 		or kind == Kind.ORB_WEAPON_MISSILE
+		or kind == Kind.ORB_QUANTUM_CRYSTAL
 	)
 
 
@@ -647,7 +724,7 @@ func update_entity(delta: float, speed_mult: float, glider_pos: Vector3, magnet_
 		if is_meteor():
 			_visual_root.rotation += rot_speed * delta
 		elif is_pickup_orb():
-			_visual_root.rotation.y += delta * 2.4
+			_visual_root.rotation.y += delta * (4.2 if kind == Kind.ORB_QUANTUM_CRYSTAL else 2.4)
 			if _ring_inst != null:
 				_ring_inst.rotation.x += delta * 3.1
 
