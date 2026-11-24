@@ -48,7 +48,8 @@ var _wake_ring_timer: float = 0.0
 var _wingtip_trail_timer: float = 0.0
 var _prev_wingtips: Array[Vector3] = []
 var _last_tap_msec: int = 0
-var _last_back_msec: int = -10000
+var _last_back_action_msec: int = 0
+var _exit_confirm_msec: int = 0
 var _last_tap_pos: Vector2 = Vector2.ZERO
 var _combo: int = 1
 var _combo_timer: float = 0.0
@@ -132,6 +133,9 @@ var _hangar_overlay: Control
 var _lbl_hangar_credits: Label
 var _hangar_rows: Array[Dictionary] = []
 var _settings_overlay: Control
+var _toast_panel: PanelContainer
+var _toast_label: Label
+var _toast_tween: Tween
 
 
 func _ready() -> void:
@@ -205,53 +209,85 @@ func _close_all_modals() -> void:
 
 
 func _handle_back_navigation() -> void:
+	var now_msec: int = Time.get_ticks_msec()
+	if now_msec - _last_back_action_msec < 260:
+		return
+	_last_back_action_msec = now_msec
+
 	if _settings_overlay != null and _settings_overlay.visible:
 		_audio.play_ui_click()
 		_settings_overlay.visible = false
+		_exit_confirm_msec = 0
 		return
 	if _hangar_overlay != null and _hangar_overlay.visible:
 		_audio.play_ui_click()
 		_hangar_overlay.visible = false
+		_exit_confirm_msec = 0
+		return
+	if _state == GameState.GAME_OVER:
+		_audio.play_ui_click()
+		_enter_menu_state()
+		_exit_confirm_msec = 0
 		return
 	if _state == GameState.PLAYING:
 		_toggle_pause(true)
-		_last_back_msec = Time.get_ticks_msec()
-		_show_exit_hint()
-	elif _state == GameState.PAUSED:
-		_try_back_exit()
-	elif _state == GameState.GAME_OVER:
-		_audio.play_ui_click()
-		_enter_menu_state()
-	elif _state == GameState.MENU:
-		_try_back_exit()
-
-
-## Двойное нажатие «Назад» (в течение 2 сек) закрывает игру
-func _try_back_exit() -> void:
-	var now_msec: int = Time.get_ticks_msec()
-	if now_msec - _last_back_msec <= 2000:
-		_bank_uncommitted_credits()
-		if _config != null:
-			_config.save_data()
-		get_tree().quit()
+		_exit_confirm_msec = now_msec
+		_show_toast("Для выхода нажмите еще раз")
 		return
-	_last_back_msec = now_msec
-	_show_exit_hint()
+	if _state == GameState.PAUSED or _state == GameState.MENU:
+		if _exit_confirm_msec > 0 and (now_msec - _exit_confirm_msec) <= 2000:
+			_bank_uncommitted_credits()
+			if _config != null:
+				_config.save_data()
+			get_tree().quit()
+		else:
+			_exit_confirm_msec = now_msec
+			_audio.play_ui_click()
+			_show_toast("Для выхода нажмите еще раз")
 
 
-func _show_exit_hint() -> void:
-	if _floating_texts_root == null:
+func _build_toast_ui() -> void:
+	_toast_panel = UiBuilder.create_glass_panel(
+		Color(0.02, 0.06, 0.14, 0.94),
+		Color(0.22, 0.85, 0.98, 0.85),
+		14,
+		20.0,
+		12.0
+	)
+	_toast_panel.position = Vector2(50.0, _view_h - 115.0 - _safe_bot_vp)
+	_toast_panel.size = Vector2(_view_w - 100.0, 50.0)
+	_toast_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_toast_panel.visible = false
+	_ui_root.add_child(_toast_panel)
+
+	_toast_label = UiBuilder.create_label("", 17, Color(0.92, 0.98, 1.0), HORIZONTAL_ALIGNMENT_CENTER, 3)
+	_toast_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_toast_panel.add_child(_toast_label)
+
+
+func _show_toast(msg: String) -> void:
+	if _toast_panel == null or _toast_label == null:
 		return
-	var lbl := UiBuilder.create_label("Нажмите «Назад» ещё раз для выхода", 16, Color(1.0, 0.92, 0.55), HORIZONTAL_ALIGNMENT_CENTER, 4)
-	lbl.position = Vector2(20.0, _view_h - 120.0)
-	lbl.custom_minimum_size = Vector2(_view_w - 40.0, 28.0)
-	lbl.size = Vector2(_view_w - 40.0, 28.0)
-	_floating_texts_root.add_child(lbl)
-	_floating_labels.append({"label": lbl, "age": 0.0, "duration": 1.8, "color": Color(1.0, 0.92, 0.55), "static": true})
+	if _toast_tween != null and _toast_tween.is_valid():
+		_toast_tween.kill()
+	_toast_label.text = msg
+	_toast_panel.visible = true
+	_toast_panel.modulate.a = 0.0
+	_toast_tween = create_tween()
+	_toast_tween.tween_property(_toast_panel, "modulate:a", 1.0, 0.14)
+	_toast_tween.tween_interval(1.65)
+	_toast_tween.tween_property(_toast_panel, "modulate:a", 0.0, 0.30)
+	_toast_tween.tween_callback(func() -> void:
+		if _toast_panel != null:
+			_toast_panel.visible = false
+	)
 
 
 func _exit_tree() -> void:
 	Engine.time_scale = 1.0
+	if _toast_tween != null and _toast_tween.is_valid():
+		_toast_tween.kill()
+	_toast_tween = null
 	_active_touches.clear()
 	_modal_cards.clear()
 	_floating_labels.clear()
@@ -282,7 +318,11 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventKey:
 		var ke := event as InputEventKey
 		if ke.pressed and not ke.echo:
-			if ke.keycode == KEY_ESCAPE or ke.keycode == KEY_P:
+			if ke.keycode == KEY_ESCAPE or ke.keycode == KEY_BACK:
+				_handle_back_navigation()
+				get_viewport().set_input_as_handled()
+				return
+			elif ke.keycode == KEY_P:
 				if _state == GameState.PLAYING:
 					_toggle_pause(true)
 				elif _state == GameState.PAUSED:
@@ -1380,6 +1420,7 @@ func _toggle_pause(paused: bool) -> void:
 	elif not paused and _state == GameState.PAUSED:
 		_state = GameState.PLAYING
 		_pause_overlay.visible = false
+		_exit_confirm_msec = 0
 
 
 func _trigger_game_over() -> void:
@@ -1451,6 +1492,7 @@ func _build_all_ui() -> void:
 	_build_gameover_overlay()
 	_build_hangar_overlay()
 	_build_settings_overlay()
+	_build_toast_ui()
 
 
 func _apply_hud_safe_margins() -> void:
@@ -1495,6 +1537,9 @@ func _apply_hud_safe_margins() -> void:
 	if _boss_hud_panel != null:
 		_boss_hud_panel.position = Vector2(20.0, top_y + 210.0)
 		_boss_hud_panel.size = Vector2(_view_w - 40.0, 42.0)
+	if _toast_panel != null:
+		_toast_panel.position = Vector2(50.0, _view_h - 115.0 - _safe_bot_vp)
+		_toast_panel.size = Vector2(_view_w - 100.0, 50.0)
 
 	_relayout_modal_cards()
 
