@@ -37,6 +37,7 @@ var _is_assault_mode: bool = false
 var _score: int = 0
 var _last_banked_score: int = 0
 var _run_crystals: int = 0
+var _crystals_dirty_save: bool = false
 var _wave: int = 1
 var _wave_timer: float = 0.0
 var _wave_duration: float = 26.0
@@ -192,15 +193,19 @@ func _notification(what: int) -> void:
 
 
 func _bank_uncommitted_credits() -> void:
-	if _config == null or _score <= _last_banked_score:
+	if _config == null:
 		return
 	# Боевые очки конвертируются в Квантовые Кристаллы по курсу 1 КР за 1000 очков (остаток копится)
-	var whole: int = (_score - _last_banked_score) / GameConfig.SCORE_PER_BONUS_CRYSTAL
-	if whole <= 0:
-		return
-	_last_banked_score += whole * GameConfig.SCORE_PER_BONUS_CRYSTAL
-	_run_crystals += whole
-	_config.add_crystals(whole, true)
+	if _score > _last_banked_score:
+		var whole: int = (_score - _last_banked_score) / GameConfig.SCORE_PER_BONUS_CRYSTAL
+		if whole > 0:
+			_last_banked_score += whole * GameConfig.SCORE_PER_BONUS_CRYSTAL
+			_run_crystals += whole
+			_config.add_crystals(whole, false)
+			_crystals_dirty_save = true
+	if _crystals_dirty_save:
+		_crystals_dirty_save = false
+		_config.save_data()
 
 
 func _close_all_modals() -> void:
@@ -1148,7 +1153,8 @@ func _collect_orb(ent: SpaceEntity3D) -> void:
 			_audio.play_shield_restore()
 		SpaceEntity3D.Kind.ORB_QUANTUM_CRYSTAL:
 			_run_crystals += 1
-			_config.add_crystals(1)
+			_config.add_crystals(1, false)
+			_crystals_dirty_save = true
 			_score += 60 * _combo
 			_audio.play_orb_pickup(true, _combo)
 			_spawn_floating_3d_text(pos, "+1 КР", Color(0.45, 0.95, 1.0))
@@ -1410,6 +1416,13 @@ func _start_new_run() -> void:
 	_timer_vulcan = 0.0
 	_timer_laser = 0.0
 	_ammo_missiles = int(round(4.0 * ammo_mult))
+	_cd_base_plasma = 0.0
+	_cd_heavy_plasma = 0.0
+	_cd_vulcan = 0.0
+	_cd_missile = 0.0
+	_cd_drones = 0.0
+	_wake_ring_timer = 0.0
+	_wingtip_trail_timer = 0.0
 
 	_director.reset_director()
 	_audio.set_hyper_mode(false)
@@ -1425,6 +1438,7 @@ func _start_new_run() -> void:
 func _toggle_pause(paused: bool) -> void:
 	_audio.play_ui_click()
 	if paused and _state == GameState.PLAYING:
+		_bank_uncommitted_credits()
 		_state = GameState.PAUSED
 		_pause_overlay.visible = true
 	elif not paused and _state == GameState.PAUSED:

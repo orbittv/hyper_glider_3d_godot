@@ -171,16 +171,26 @@ static func create_launch_hero_button(text: String, height: float = 64.0, font_s
 		txt_mat.set_shader_parameter("box_width", maxf(1.0, btn.size.x))
 	)
 
-	# 3. Лёгкий пружинный отклик при нажатии
+	# 3. Лёгкий пружинный отклик при нажатии (с защитой от наслоения Tween при быстрых кликах)
 	btn.button_down.connect(func() -> void:
 		btn.pivot_offset = btn.size * 0.5
+		if btn.has_meta("press_tween"):
+			var old_tw := btn.get_meta("press_tween") as Tween
+			if old_tw != null and old_tw.is_valid():
+				old_tw.kill()
 		var tw := btn.create_tween()
+		btn.set_meta("press_tween", tw)
 		tw.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 		tw.tween_property(btn, "scale", Vector2(0.96, 0.94), 0.06)
 	)
 	btn.button_up.connect(func() -> void:
 		btn.pivot_offset = btn.size * 0.5
+		if btn.has_meta("press_tween"):
+			var old_tw := btn.get_meta("press_tween") as Tween
+			if old_tw != null and old_tw.is_valid():
+				old_tw.kill()
 		var tw := btn.create_tween()
+		btn.set_meta("press_tween", tw)
 		tw.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 		tw.tween_property(btn, "scale", Vector2(1.03, 1.04), 0.11)
 		tw.tween_property(btn, "scale", Vector2.ONE, 0.12)

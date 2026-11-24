@@ -1,13 +1,15 @@
 class_name FxManager3D
 extends Node3D
 
-## Менеджер 3D-спецэффектов без утечек памяти и лишних аллокаций материалов:
-## - 3D-разлёт каменных осколков с кэшированными материалами (0 аллокаций StandardMaterial3D на осколках)
-## - Тонкие плазменные ударные кольца (TorusMesh) и компактные искры с лимитом MAX_ACTIVE_EFFECTS
+## Менеджер 3D-спецэффектов с объектным пулом нод и материалов (0 аллокаций в бою):
+## - Повторно использует пул из MAX_ACTIVE_EFFECTS узлов MeshInstance3D и материалов StandardMaterial3D
+## - 3D-разлёт каменных осколков с кэшированными материалами
+## - Тонкие плазменные ударные кольца (TorusMesh), искры, молнии «На грани» и ленты с кончиков крыльев
 
-const MAX_ACTIVE_EFFECTS: int = 72
+const MAX_ACTIVE_EFFECTS: int = 84
 
 var _effects: Array[Dictionary] = []
+var _free_nodes: Array[MeshInstance3D] = []
 
 static var _sphere_mesh: SphereMesh
 static var _ring_mesh: TorusMesh
@@ -24,6 +26,7 @@ static func clear_static_caches() -> void:
 
 func _exit_tree() -> void:
 	_effects.clear()
+	_free_nodes.clear()
 
 
 static func _ensure_meshes() -> void:
@@ -74,40 +77,70 @@ static func _pick_shard_material(col: Color) -> StandardMaterial3D:
 	return _shard_materials[0] # Квантовый циан
 
 
+func _acquire_fx_node(mesh_res: Mesh, custom_shared_mat: StandardMaterial3D = null) -> Dictionary:
+	_trim_excess_effects()
+	var node: MeshInstance3D = null
+	while not _free_nodes.is_empty():
+		var candidate: MeshInstance3D = _free_nodes.pop_back()
+		if is_instance_valid(candidate):
+			node = candidate
+			break
+
+	var pooled_mat: StandardMaterial3D = null
+	if node == null:
+		node = MeshInstance3D.new()
+		pooled_mat = StandardMaterial3D.new()
+		pooled_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		pooled_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		pooled_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		node.set_meta("pooled_mat", pooled_mat)
+		add_child(node)
+	else:
+		pooled_mat = node.get_meta("pooled_mat") as StandardMaterial3D
+
+	node.mesh = mesh_res
+	node.transform = Transform3D.IDENTITY
+	node.visible = true
+	if custom_shared_mat != null:
+		node.material_override = custom_shared_mat
+	else:
+		node.material_override = pooled_mat
+	return {"node": node, "mat": pooled_mat}
+
+
+func _release_fx_node(node: Node3D) -> void:
+	var mi := node as MeshInstance3D
+	if mi != null and is_instance_valid(mi):
+		mi.visible = false
+		_free_nodes.append(mi)
+
+
 func _trim_excess_effects() -> void:
 	while _effects.size() >= MAX_ACTIVE_EFFECTS:
 		var oldest: Dictionary = _effects[0]
 		var node := oldest.get("node") as Node3D
-		if is_instance_valid(node):
-			node.queue_free()
+		_release_fx_node(node)
 		_effects.remove_at(0)
 
 
 func clear_all() -> void:
 	for fx: Dictionary in _effects:
 		var node := fx.get("node") as Node3D
-		if is_instance_valid(node):
-			node.queue_free()
+		_release_fx_node(node)
 	_effects.clear()
 
 
 func spawn_meteor_explosion(world_pos: Vector3, base_radius: float, glow_col: Color, is_bomb: bool = false) -> void:
 	_ensure_meshes()
-	_trim_excess_effects()
 
 	# 1. Компактная яркая вспышка в центре взрыва
-	var flash_inst := MeshInstance3D.new()
-	flash_inst.mesh = _sphere_mesh
-	var flash_mat := StandardMaterial3D.new()
-	flash_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	flash_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	flash_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	var flash_pair: Dictionary = _acquire_fx_node(_sphere_mesh)
+	var flash_inst := flash_pair["node"] as MeshInstance3D
+	var flash_mat := flash_pair["mat"] as StandardMaterial3D
 	flash_mat.albedo_color = Color(glow_col.r, glow_col.g, glow_col.b, 0.72)
-	flash_inst.material_override = flash_mat
 	flash_inst.position = world_pos
 	var start_s: float = base_radius * 0.35
 	flash_inst.scale = Vector3.ONE * start_s
-	add_child(flash_inst)
 
 	_effects.append({
 		"type": "sphere_expand",
@@ -121,18 +154,13 @@ func spawn_meteor_explosion(world_pos: Vector3, base_radius: float, glow_col: Co
 	})
 
 	# 2. Тонкое ударное 3D-кольцо
-	var ring_inst := MeshInstance3D.new()
-	ring_inst.mesh = _ring_mesh
-	var ring_mat := StandardMaterial3D.new()
-	ring_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	ring_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	ring_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	var ring_pair: Dictionary = _acquire_fx_node(_ring_mesh)
+	var ring_inst := ring_pair["node"] as MeshInstance3D
+	var ring_mat := ring_pair["mat"] as StandardMaterial3D
 	ring_mat.albedo_color = Color(glow_col.r, glow_col.g, glow_col.b, 0.65)
-	ring_inst.material_override = ring_mat
 	ring_inst.position = world_pos
 	ring_inst.rotation_degrees = Vector3(randf_range(65.0, 115.0), randf_range(-25.0, 25.0), 0.0)
 	ring_inst.scale = Vector3.ONE * (base_radius * 0.4)
-	add_child(ring_inst)
 
 	_effects.append({
 		"type": "sphere_expand",
@@ -149,14 +177,11 @@ func spawn_meteor_explosion(world_pos: Vector3, base_radius: float, glow_col: Co
 	var shared_shard_mat: StandardMaterial3D = _pick_shard_material(glow_col)
 	var shard_count: int = 8 if is_bomb else 5
 	for i: int in range(shard_count):
-		_trim_excess_effects()
-		var shard := MeshInstance3D.new()
-		shard.mesh = SpaceEntity3D.get_shared_rock_mesh(i)
-		shard.material_override = shared_shard_mat
+		var shard_pair: Dictionary = _acquire_fx_node(SpaceEntity3D.get_shared_rock_mesh(i), shared_shard_mat)
+		var shard := shard_pair["node"] as MeshInstance3D
 		shard.position = world_pos
 		var shard_s: float = clampf(base_radius * randf_range(0.18, 0.34), 0.16, 0.68)
 		shard.scale = Vector3.ONE * shard_s
-		add_child(shard)
 
 		var dir := Vector3(
 			randf_range(-1.0, 1.0),
@@ -178,18 +203,12 @@ func spawn_meteor_explosion(world_pos: Vector3, base_radius: float, glow_col: Co
 
 func spawn_hit_spark(world_pos: Vector3, col: Color) -> void:
 	_ensure_meshes()
-	_trim_excess_effects()
-	var spark := MeshInstance3D.new()
-	spark.mesh = _sphere_mesh
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	var pair: Dictionary = _acquire_fx_node(_sphere_mesh)
+	var spark := pair["node"] as MeshInstance3D
+	var mat := pair["mat"] as StandardMaterial3D
 	mat.albedo_color = col
-	spark.material_override = mat
 	spark.position = world_pos
 	spark.scale = Vector3.ONE * 0.22
-	add_child(spark)
 
 	_effects.append({
 		"type": "sphere_expand",
@@ -206,21 +225,15 @@ func spawn_hit_spark(world_pos: Vector3, col: Color) -> void:
 ## 3D-дуга молнии между глайдером и объектом при манёвре «На грани» или цепном 3D-лазере
 func spawn_graze_arc(from_pos: Vector3, to_pos: Vector3, col: Color = Color(0.28, 0.96, 1.0)) -> void:
 	_ensure_meshes()
-	_trim_excess_effects()
 	var diff: Vector3 = to_pos - from_pos
 	var dist: float = diff.length()
 	if dist < 0.2:
 		return
 
-	var arc := MeshInstance3D.new()
-	arc.mesh = _arc_cyl_mesh
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	var pair: Dictionary = _acquire_fx_node(_arc_cyl_mesh)
+	var arc := pair["node"] as MeshInstance3D
+	var mat := pair["mat"] as StandardMaterial3D
 	mat.albedo_color = col
-	arc.material_override = mat
-	add_child(arc)
 
 	arc.global_position = from_pos + diff * 0.5
 	var dir: Vector3 = diff / dist
@@ -242,19 +255,13 @@ func spawn_graze_arc(from_pos: Vector3, to_pos: Vector3, col: Color = Color(0.28
 ## 3D-кольцо реактивного плазменного следа позади сопел глайдера
 func spawn_engine_wake_ring(world_pos: Vector3, col: Color) -> void:
 	_ensure_meshes()
-	_trim_excess_effects()
-	var wake := MeshInstance3D.new()
-	wake.mesh = _ring_mesh
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	var pair: Dictionary = _acquire_fx_node(_ring_mesh)
+	var wake := pair["node"] as MeshInstance3D
+	var mat := pair["mat"] as StandardMaterial3D
 	mat.albedo_color = Color(col.r, col.g, col.b, 0.45)
-	wake.material_override = mat
 	wake.position = world_pos
 	wake.rotation_degrees = Vector3(90.0, 0.0, 0.0)
 	wake.scale = Vector3.ONE * 0.42
-	add_child(wake)
 
 	_effects.append({
 		"type": "wake_ring",
@@ -271,21 +278,15 @@ func spawn_engine_wake_ring(world_pos: Vector3, col: Color) -> void:
 ## Парные вихревые трассеры с кончиков крыльев (Winglets) при манёврах и 360°-Бочке
 func spawn_wingtip_trail_segment(from_pos: Vector3, to_pos: Vector3, col: Color) -> void:
 	_ensure_meshes()
-	_trim_excess_effects()
 	var diff: Vector3 = to_pos - from_pos
 	var dist: float = diff.length()
 	if dist < 0.05:
 		return
 
-	var seg := MeshInstance3D.new()
-	seg.mesh = _arc_cyl_mesh
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	var pair: Dictionary = _acquire_fx_node(_arc_cyl_mesh)
+	var seg := pair["node"] as MeshInstance3D
+	var mat := pair["mat"] as StandardMaterial3D
 	mat.albedo_color = Color(col.r, col.g, col.b, 0.55)
-	seg.material_override = mat
-	add_child(seg)
 
 	seg.global_position = from_pos + diff * 0.5
 	var dir: Vector3 = diff / dist
@@ -317,7 +318,7 @@ func update_effects(delta: float) -> void:
 		var age: float = float(fx["age"]) + delta
 		var dur: float = float(fx["duration"])
 		if age >= dur:
-			node.queue_free()
+			_release_fx_node(node)
 			_effects.remove_at(i)
 			i -= 1
 			continue
