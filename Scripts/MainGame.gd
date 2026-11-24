@@ -44,6 +44,10 @@ var _max_shields: int = 3
 var _graze_shield_progress: int = 0
 var _slowmo_timer: float = 0.0
 var _wake_ring_timer: float = 0.0
+var _wingtip_trail_timer: float = 0.0
+var _prev_wingtips: Array[Vector3] = []
+var _last_tap_msec: int = 0
+var _last_tap_pos: Vector2 = Vector2.ZERO
 var _combo: int = 1
 var _combo_timer: float = 0.0
 
@@ -223,6 +227,7 @@ func _exit_tree() -> void:
 	_slot_panels.clear()
 	_slot_labels.clear()
 	_shield_dots.clear()
+	_prev_wingtips.clear()
 	UiBuilder.clear_static_caches()
 	WeaponProjectile3D.clear_static_caches()
 	SpaceEntity3D.clear_static_caches()
@@ -253,6 +258,12 @@ func _input(event: InputEvent) -> void:
 			elif ke.keycode == KEY_SPACE or ke.keycode == KEY_ENTER:
 				if _state == GameState.PLAYING:
 					_try_activate_hyper_core()
+			elif ke.keycode == KEY_Q:
+				if _state == GameState.PLAYING:
+					_try_perform_barrel_roll(-1.0)
+			elif ke.keycode == KEY_E or ke.keycode == KEY_SHIFT:
+				if _state == GameState.PLAYING:
+					_try_perform_barrel_roll(1.0)
 
 	if _state != GameState.PLAYING:
 		_is_dragging = false
@@ -266,6 +277,7 @@ func _input(event: InputEvent) -> void:
 		var st := event as InputEventScreenTouch
 		if st.pressed:
 			if st.position.y >= touch_top_limit:
+				_check_double_tap_barrel_roll(st.position)
 				_active_touches[st.index] = st.position
 				_is_dragging = true
 				_last_drag_pos = st.position
@@ -292,12 +304,15 @@ func _input(event: InputEvent) -> void:
 		if mb.button_index == MOUSE_BUTTON_LEFT:
 			if mb.pressed:
 				if mb.position.y >= touch_top_limit:
+					_check_double_tap_barrel_roll(mb.position)
 					_is_dragging = true
 					_last_drag_pos = mb.position
 					if not _config.swipe_control_enabled:
 						_set_glider_target_from_screen(mb.position)
 			else:
 				_is_dragging = false
+		elif mb.button_index == MOUSE_BUTTON_RIGHT and mb.pressed:
+			_try_perform_barrel_roll(1.0 if mb.position.x >= _view_w * 0.5 else -1.0)
 
 	elif event is InputEventMouseMotion and not OS.has_feature("mobile"):
 		var mm := event as InputEventMouseMotion
@@ -320,6 +335,25 @@ func _apply_touch_delta(delta_px: Vector2, cur_pos: Vector2) -> void:
 		_glider.move_target_by_delta(Vector2(dx, dy))
 	else:
 		_set_glider_target_from_screen(cur_pos)
+
+
+func _check_double_tap_barrel_roll(tap_pos: Vector2) -> void:
+	var now_msec: int = Time.get_ticks_msec()
+	if now_msec - _last_tap_msec <= 290 and tap_pos.distance_to(_last_tap_pos) <= 92.0:
+		_last_tap_msec = 0
+		var roll_dir: float = 1.0 if tap_pos.x >= _view_w * 0.5 else -1.0
+		if absf(_glider.current_vel.x) > 1.5:
+			roll_dir = signf(_glider.current_vel.x)
+		_try_perform_barrel_roll(roll_dir)
+	else:
+		_last_tap_msec = now_msec
+		_last_tap_pos = tap_pos
+
+
+func _try_perform_barrel_roll(dir_sign: float) -> void:
+	if _glider != null and _glider.trigger_barrel_roll(dir_sign):
+		_audio.play_graze(_combo)
+		_trigger_edge_flash(Color(0.28, 0.96, 1.0), 0.42)
 
 
 func _set_glider_target_from_screen(screen_pos: Vector2) -> void:
@@ -447,6 +481,19 @@ func _update_gameplay_3d(delta: float) -> void:
 		var wake_col: Color = Color(0.32, 1.0, 0.78) if (is_hyper or is_tunnel) else Color(0.18, 0.88, 1.0)
 		_fx3d.spawn_engine_wake_ring(_glider.global_position + Vector3(0.0, 0.0, 2.2), wake_col)
 
+	# Неоновые трассеры вихревых срывов с кончиков крыльев (Winglets) при виражах и 360°-Бочке
+	var cur_tips: Array[Vector3] = _glider.get_wingtip_positions()
+	for p_i: int in range(_prev_wingtips.size()):
+		_prev_wingtips[p_i] += Vector3(0.0, 0.0, 24.0 * delta)
+	_wingtip_trail_timer -= delta
+	if _glider.is_barrel_rolling() or _wingtip_trail_timer <= 0.0:
+		_wingtip_trail_timer = 0.032
+		if _prev_wingtips.size() == 2 and (_glider.current_vel.length() > 2.2 or _glider.is_barrel_rolling() or is_hyper or is_tunnel):
+			var trail_col: Color = Color(1.0, 0.86, 0.28) if (_glider.is_barrel_rolling() or is_overdrive) else Color(0.22, 0.94, 1.0)
+			for t_i: int in range(2):
+				_fx3d.spawn_wingtip_trail_segment(_prev_wingtips[t_i], cur_tips[t_i], trail_col)
+		_prev_wingtips = cur_tips
+
 	_update_camera_3d(delta, is_hyper, is_tunnel)
 	_env3d.update_environment(delta, current_forward_speed, is_hyper, is_tunnel)
 
@@ -550,6 +597,7 @@ func _update_weapons_3d(delta: float, is_overdrive: bool) -> void:
 				bolt_vel,
 				dmg_bonus
 			)
+		_glider.trigger_muzzle_flash(false)
 		_audio.play_plasma_fire(false)
 
 	# 2. Тяжёлая Изумрудно-Золотая Плазма с взрывной волной
@@ -566,6 +614,7 @@ func _update_weapons_3d(delta: float, is_overdrive: bool) -> void:
 				Vector3(0.0, 0.0, -108.0),
 				dmg_bonus
 			)
+			_glider.trigger_muzzle_flash(true)
 			_audio.play_plasma_fire(true)
 
 	# 3. Скорострельный Пулемёт «Вулкан»
@@ -703,11 +752,29 @@ func _update_projectiles_3d(delta: float) -> void:
 
 		var p_pos: Vector3 = proj.global_position
 
-		# Если это вражеский плазменный снаряд — проверяем попадание по 3D-глайдеру
+		# Если это вражеский плазменный снаряд — проверяем отражение 360°-Бочкой или попадание по 3D-глайдеру
 		if proj.is_enemy:
-			if p_pos.distance_to(g_pos) <= proj.hit_radius + 1.25:
+			var d_to_glider: float = p_pos.distance_to(g_pos)
+			if _glider.is_barrel_rolling() and d_to_glider <= proj.hit_radius + 3.2:
+				# Рикошет вражеской плазмы 360°-Бочкой обратно во врагов!
+				proj.is_enemy = false
+				proj.damage = 65.0 + _config.get_plasma_damage_bonus()
+				proj.age = 0.0
+				var reflect_target: SpaceEntity3D = _find_best_meteor_target(95.0, 12.0)
+				if reflect_target != null:
+					proj.velocity = (reflect_target.global_position - p_pos).normalized() * 128.0
+				else:
+					proj.velocity = Vector3(0.0, 0.0, -128.0)
+				var def_pts: int = 85 * _combo
+				_score += def_pts
+				_add_hyper_charge(7.5)
+				_audio.play_graze(_combo)
+				_fx3d.spawn_hit_spark(p_pos, Color(1.0, 0.88, 0.28))
+				_spawn_floating_3d_text(p_pos, "РИКОШЕТ БОЧКОЙ +%d!" % def_pts, Color(1.0, 0.88, 0.30))
+				continue
+			if d_to_glider <= proj.hit_radius + 1.25:
 				proj.queue_free()
-				if not is_warp_invuln:
+				if not is_warp_invuln and not _glider.is_barrel_rolling():
 					_damage_glider_shield(p_pos)
 				else:
 					_fx3d.spawn_hit_spark(p_pos, Color(0.32, 1.0, 0.78))
@@ -1006,7 +1073,7 @@ func _on_glider_hit_meteor(ent: SpaceEntity3D) -> void:
 
 
 func _damage_glider_shield(hit_pos: Vector3) -> void:
-	if _glider.is_damage_invulnerable():
+	if _glider.is_damage_invulnerable() or _glider.is_barrel_rolling():
 		return
 
 	_shields -= 1
@@ -1162,7 +1229,6 @@ func _update_floating_labels(delta: float) -> void:
 			continue
 		item["age"] = age
 		lbl.position.y -= 38.0 * delta
-		var c: Color = item["color"]
 		lbl.modulate = Color(1.0, 1.0, 1.0, 1.0 - (age / dur))
 		i -= 1
 
@@ -1213,6 +1279,7 @@ func _start_new_run() -> void:
 	_shields = _max_shields
 	_graze_shield_progress = 0
 	_slowmo_timer = 0.0
+	_prev_wingtips.clear()
 	Engine.time_scale = 1.0
 	_active_boss = null
 	_combo = 1
@@ -1365,13 +1432,17 @@ func _apply_hud_safe_margins() -> void:
 		_boss_hud_panel.position = Vector2(20.0, top_y + 210.0)
 		_boss_hud_panel.size = Vector2(_view_w - 40.0, 42.0)
 
+	_relayout_modal_cards()
+
+
+func _relayout_modal_cards() -> void:
 	for item: Dictionary in _modal_cards:
 		var card := item.get("card") as Control
 		var mx: float = float(item.get("margin_x", 22.0))
 		var ch: float = float(item.get("card_h", 500.0))
-		if card != null:
-			card.position = Vector2(mx, (_view_h - ch) * 0.5)
+		if card != null and is_instance_valid(card):
 			card.size = Vector2(_view_w - mx * 2.0, ch)
+			card.position = Vector2(mx, (_view_h - card.size.y) * 0.5)
 
 
 func _build_hud_ui() -> void:
@@ -1740,7 +1811,7 @@ func _build_menu_overlay() -> void:
 	vbox.add_child(btn_settings)
 
 	var hint_lbl := UiBuilder.create_label(
-		"Управление: Свайп/Мышь (3D-полёт Влево/Вправо/Вверх/Вниз) или WASD / Стрелки.\nВлетай в 3D Чёрные дыры для прорыва сквозь сверхсветовой Гипер-туннель!",
+		"Управление: Свайп/Мышь (3D-полёт) или WASD / Стрелки.\nДвойной тап / Q, E — 360° Бочка (отражает вражескую плазму!).",
 		12,
 		Color(0.64, 0.82, 0.96),
 		HORIZONTAL_ALIGNMENT_CENTER

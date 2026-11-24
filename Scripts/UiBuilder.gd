@@ -164,12 +164,23 @@ static func create_modal_overlay(
 	dimmer.color = dimmer_col
 	root.add_child(dimmer)
 
-	var card := create_glass_panel(bg_col, border_col, 18, 20.0, 20.0)
+	var card := Panel.new()
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = bg_col
+	sb.border_color = border_col
+	sb.set_border_width_all(2)
+	sb.set_corner_radius_all(18)
+	card.add_theme_stylebox_override("panel", sb)
 	card.position = Vector2(margin_x, (view_h - card_h) * 0.5)
 	card.size = Vector2(view_w - margin_x * 2.0, card_h)
 	root.add_child(card)
 
 	var vbox := VBoxContainer.new()
+	vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
+	vbox.offset_left = 20.0
+	vbox.offset_top = 20.0
+	vbox.offset_right = -20.0
+	vbox.offset_bottom = -20.0
 	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
 	vbox.add_theme_constant_override("separation", separation)
 	card.add_child(vbox)

@@ -45,13 +45,15 @@ var _rock_mesh_inst: MeshInstance3D
 var _plasma_core_inst: MeshInstance3D
 var _ring_inst: MeshInstance3D
 var _hit_flash_timer: float = 0.0
-var _base_rock_mat: StandardMaterial3D
+var _base_rock_mat: Material
 
 # Статический кэш процедурно сгенерированных 3D-скал и материалов
 static var _rock_meshes: Array[ArrayMesh] = []
-static var _mat_rock_brown: StandardMaterial3D
-static var _mat_rock_slate: StandardMaterial3D
-static var _mat_rock_crystal: StandardMaterial3D
+static var _mat_rock_brown: ShaderMaterial
+static var _mat_rock_slate: ShaderMaterial
+static var _mat_rock_crystal: ShaderMaterial
+static var _mat_rock_bomb_green: ShaderMaterial
+static var _mat_rock_bomb_gold: ShaderMaterial
 static var _mat_hit_flash: StandardMaterial3D
 static var _mat_plasma_green_core: StandardMaterial3D
 static var _mat_plasma_gold_core: StandardMaterial3D
@@ -87,6 +89,8 @@ static func clear_static_caches() -> void:
 	_mat_rock_brown = null
 	_mat_rock_slate = null
 	_mat_rock_crystal = null
+	_mat_rock_bomb_green = null
+	_mat_rock_bomb_gold = null
 	_mat_hit_flash = null
 	_mat_plasma_green_core = null
 	_mat_plasma_gold_core = null
@@ -111,39 +115,75 @@ static func _ensure_shared_assets() -> void:
 	for i: int in range(8):
 		_rock_meshes.append(_generate_procedural_asteroid_mesh(101 + i * 73))
 
-	_mat_rock_brown = StandardMaterial3D.new()
-	_mat_rock_brown.albedo_color = Color(0.42, 0.34, 0.29)
-	_mat_rock_brown.roughness = 0.86
-	_mat_rock_brown.metallic = 0.12
+	var rock_shader := load("res://Shaders/MeteorRock3D.gdshader") as Shader
 
-	_mat_rock_slate = StandardMaterial3D.new()
-	_mat_rock_slate.albedo_color = Color(0.32, 0.37, 0.46)
-	_mat_rock_slate.roughness = 0.78
-	_mat_rock_slate.metallic = 0.25
+	_mat_rock_brown = ShaderMaterial.new()
+	_mat_rock_brown.shader = rock_shader
+	_mat_rock_brown.set_shader_parameter("base_rock_color", Color(0.32, 0.25, 0.22))
+	_mat_rock_brown.set_shader_parameter("ridge_color", Color(0.64, 0.54, 0.48))
+	_mat_rock_brown.set_shader_parameter("rim_color", Color(0.28, 0.80, 1.0))
+	_mat_rock_brown.set_shader_parameter("crack_intensity", 0.0)
+	_mat_rock_brown.set_shader_parameter("metallic_val", 0.14)
+	_mat_rock_brown.set_shader_parameter("roughness_val", 0.84)
 
-	_mat_rock_crystal = StandardMaterial3D.new()
-	_mat_rock_crystal.albedo_color = Color(0.24, 0.72, 0.96)
-	_mat_rock_crystal.roughness = 0.22
-	_mat_rock_crystal.metallic = 0.75
-	_mat_rock_crystal.emission_enabled = true
-	_mat_rock_crystal.emission = Color(0.12, 0.55, 0.88)
-	_mat_rock_crystal.emission_energy_multiplier = 0.95
+	_mat_rock_slate = ShaderMaterial.new()
+	_mat_rock_slate.shader = rock_shader
+	_mat_rock_slate.set_shader_parameter("base_rock_color", Color(0.22, 0.27, 0.36))
+	_mat_rock_slate.set_shader_parameter("ridge_color", Color(0.52, 0.60, 0.74))
+	_mat_rock_slate.set_shader_parameter("rim_color", Color(0.38, 0.86, 1.0))
+	_mat_rock_slate.set_shader_parameter("crack_intensity", 0.0)
+	_mat_rock_slate.set_shader_parameter("metallic_val", 0.34)
+	_mat_rock_slate.set_shader_parameter("roughness_val", 0.68)
+
+	_mat_rock_crystal = ShaderMaterial.new()
+	_mat_rock_crystal.shader = rock_shader
+	_mat_rock_crystal.set_shader_parameter("base_rock_color", Color(0.14, 0.45, 0.72))
+	_mat_rock_crystal.set_shader_parameter("ridge_color", Color(0.52, 0.94, 1.0))
+	_mat_rock_crystal.set_shader_parameter("rim_color", Color(0.65, 0.45, 1.0))
+	_mat_rock_crystal.set_shader_parameter("crack_color", Color(0.24, 0.96, 1.0))
+	_mat_rock_crystal.set_shader_parameter("crack_intensity", 0.95)
+	_mat_rock_crystal.set_shader_parameter("metallic_val", 0.78)
+	_mat_rock_crystal.set_shader_parameter("roughness_val", 0.22)
+
+	_mat_rock_bomb_green = ShaderMaterial.new()
+	_mat_rock_bomb_green.shader = rock_shader
+	_mat_rock_bomb_green.set_shader_parameter("base_rock_color", Color(0.14, 0.24, 0.18))
+	_mat_rock_bomb_green.set_shader_parameter("ridge_color", Color(0.38, 0.54, 0.44))
+	_mat_rock_bomb_green.set_shader_parameter("rim_color", Color(0.22, 1.0, 0.56))
+	_mat_rock_bomb_green.set_shader_parameter("crack_color", Color(0.18, 1.0, 0.48))
+	_mat_rock_bomb_green.set_shader_parameter("crack_intensity", 1.75)
+	_mat_rock_bomb_green.set_shader_parameter("metallic_val", 0.22)
+	_mat_rock_bomb_green.set_shader_parameter("roughness_val", 0.65)
+
+	_mat_rock_bomb_gold = ShaderMaterial.new()
+	_mat_rock_bomb_gold.shader = rock_shader
+	_mat_rock_bomb_gold.set_shader_parameter("base_rock_color", Color(0.28, 0.18, 0.12))
+	_mat_rock_bomb_gold.set_shader_parameter("ridge_color", Color(0.62, 0.44, 0.30))
+	_mat_rock_bomb_gold.set_shader_parameter("rim_color", Color(1.0, 0.72, 0.18))
+	_mat_rock_bomb_gold.set_shader_parameter("crack_color", Color(1.0, 0.62, 0.12))
+	_mat_rock_bomb_gold.set_shader_parameter("crack_intensity", 1.95)
+	_mat_rock_bomb_gold.set_shader_parameter("metallic_val", 0.26)
+	_mat_rock_bomb_gold.set_shader_parameter("roughness_val", 0.62)
 
 	_mat_hit_flash = StandardMaterial3D.new()
-	_mat_hit_flash.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_mat_hit_flash.albedo_color = Color(1.0, 0.95, 0.88)
+	_mat_hit_flash.albedo_color = Color(0.78, 0.90, 1.0)
+	_mat_hit_flash.roughness = 0.32
+	_mat_hit_flash.metallic = 0.45
+	_mat_hit_flash.emission_enabled = true
+	_mat_hit_flash.emission = Color(0.42, 0.82, 1.0)
+	_mat_hit_flash.emission_energy_multiplier = 1.15
 
 	_mat_plasma_green_core = StandardMaterial3D.new()
 	_mat_plasma_green_core.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_mat_plasma_green_core.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	_mat_plasma_green_core.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-	_mat_plasma_green_core.albedo_color = Color(0.18, 1.0, 0.52, 0.86)
+	_mat_plasma_green_core.albedo_color = Color(0.18, 1.0, 0.52, 0.72)
 
 	_mat_plasma_gold_core = StandardMaterial3D.new()
 	_mat_plasma_gold_core.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_mat_plasma_gold_core.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	_mat_plasma_gold_core.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-	_mat_plasma_gold_core.albedo_color = Color(1.0, 0.68, 0.14, 0.88)
+	_mat_plasma_gold_core.albedo_color = Color(1.0, 0.68, 0.14, 0.76)
 
 	_mat_black_hole_void = StandardMaterial3D.new()
 	_mat_black_hole_void.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -377,7 +417,11 @@ func _build_meteor_visual(variant_type: int) -> void:
 	_rock_mesh_inst.mesh = _rock_meshes[randi() % _rock_meshes.size()]
 	_rock_mesh_inst.scale = Vector3.ONE * radius
 
-	if variant_type == 3:
+	if variant_type == 1:
+		_base_rock_mat = _mat_rock_bomb_green
+	elif variant_type == 2:
+		_base_rock_mat = _mat_rock_bomb_gold
+	elif variant_type == 3:
 		_base_rock_mat = _mat_rock_crystal
 	elif randi() % 2 == 0:
 		_base_rock_mat = _mat_rock_brown
@@ -387,19 +431,14 @@ func _build_meteor_visual(variant_type: int) -> void:
 	_rock_mesh_inst.material_override = _base_rock_mat
 	_visual_root.add_child(_rock_mesh_inst)
 
-	# Если это нестабильный плазменный метеорит-бомба, добавляем светящееся ядро и плазменное кольцо
+	# Если это нестабильный плазменный метеорит-бомба, добавляем орбитальное плазменное кольцо вокруг раскалённой породы
 	if variant_type == 1 or variant_type == 2:
 		var core_mat: StandardMaterial3D = _mat_plasma_green_core if variant_type == 1 else _mat_plasma_gold_core
-		_plasma_core_inst = MeshInstance3D.new()
-		_plasma_core_inst.mesh = _orb_sphere_mesh
-		_plasma_core_inst.material_override = core_mat
-		_plasma_core_inst.scale = Vector3.ONE * (radius * 2.15)
-		_visual_root.add_child(_plasma_core_inst)
-
 		_ring_inst = MeshInstance3D.new()
 		_ring_inst.mesh = _orb_ring_mesh
 		_ring_inst.material_override = core_mat
-		_ring_inst.scale = Vector3.ONE * (radius * 1.65)
+		_ring_inst.rotation_degrees = Vector3(68.0, 18.0, 0.0)
+		_ring_inst.scale = Vector3.ONE * (radius * 1.52)
 		_visual_root.add_child(_ring_inst)
 
 

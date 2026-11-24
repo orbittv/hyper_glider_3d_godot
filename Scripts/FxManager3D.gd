@@ -268,6 +268,42 @@ func spawn_engine_wake_ring(world_pos: Vector3, col: Color) -> void:
 	})
 
 
+## Парные вихревые трассеры с кончиков крыльев (Winglets) при манёврах и 360°-Бочке
+func spawn_wingtip_trail_segment(from_pos: Vector3, to_pos: Vector3, col: Color) -> void:
+	_ensure_meshes()
+	_trim_excess_effects()
+	var diff: Vector3 = to_pos - from_pos
+	var dist: float = diff.length()
+	if dist < 0.05:
+		return
+
+	var seg := MeshInstance3D.new()
+	seg.mesh = _arc_cyl_mesh
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.albedo_color = Color(col.r, col.g, col.b, 0.55)
+	seg.material_override = mat
+	add_child(seg)
+
+	seg.global_position = from_pos + diff * 0.5
+	var dir: Vector3 = diff / dist
+	var up_ref: Vector3 = Vector3.RIGHT if absf(dir.dot(Vector3.UP)) > 0.95 else Vector3.UP
+	var x_axis: Vector3 = up_ref.cross(dir).normalized() * 0.26
+	var z_axis: Vector3 = dir.cross(x_axis).normalized() * 0.26
+	seg.global_transform.basis = Basis(x_axis, dir * dist, z_axis)
+
+	_effects.append({
+		"type": "wing_trail",
+		"node": seg,
+		"mat": mat,
+		"color": col,
+		"age": 0.0,
+		"duration": 0.30
+	})
+
+
 func update_effects(delta: float) -> void:
 	var i: int = _effects.size() - 1
 	while i >= 0:
@@ -317,5 +353,11 @@ func update_effects(delta: float) -> void:
 			if mat_w != null:
 				var cw: Color = fx["color"]
 				mat_w.albedo_color = Color(cw.r, cw.g, cw.b, (1.0 - t) * 0.45)
+		elif fx_type == "wing_trail":
+			node.position.z += 24.0 * delta
+			var mat_wt := fx.get("mat") as StandardMaterial3D
+			if mat_wt != null:
+				var cwt: Color = fx["color"]
+				mat_wt.albedo_color = Color(cwt.r, cwt.g, cwt.b, (1.0 - t) * 0.55)
 
 		i -= 1

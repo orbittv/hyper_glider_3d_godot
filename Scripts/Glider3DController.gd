@@ -20,8 +20,10 @@ var current_vel: Vector2 = Vector2.ZERO
 
 var _hull_root: Node3D
 var _shield_dome: MeshInstance3D
-var _shield_mat: StandardMaterial3D
+var _shield_shader_mat: ShaderMaterial
 var _engine_light: OmniLight3D
+var _muzzle_light: OmniLight3D
+var _muzzle_flash_energy: float = 0.0
 var _jet_left: MeshInstance3D
 var _jet_right: MeshInstance3D
 var _jet_mat: ShaderMaterial
@@ -29,6 +31,14 @@ var _jet_mat: ShaderMaterial
 var _wing_strip_left: MeshInstance3D
 var _wing_strip_right: MeshInstance3D
 var _wing_strip_mat: StandardMaterial3D
+var _wingtip_beacon_left: Node3D
+var _wingtip_beacon_right: Node3D
+
+const BARREL_ROLL_DURATION: float = 0.48
+const BARREL_ROLL_COOLDOWN: float = 1.30
+var _barrel_roll_timer: float = 0.0
+var _barrel_roll_cd: float = 0.0
+var _barrel_roll_dir: float = 1.0
 
 var _reticle_near: MeshInstance3D
 var _reticle_far: MeshInstance3D
@@ -153,6 +163,40 @@ func _build_glider_3d_model() -> void:
 	_wing_strip_right.position = Vector3(0.0, 0.05, -0.42)
 	wing_r.add_child(_wing_strip_right)
 
+	# Законцовки крыльев (Winglets) с неоновыми габаритными маяками для хищного 3D-силуэта
+	var winglet_box := BoxMesh.new()
+	winglet_box.size = Vector3(0.09, 0.46, 0.72)
+
+	var winglet_l := MeshInstance3D.new()
+	winglet_l.mesh = winglet_box
+	winglet_l.material_override = mat_dark_armor
+	winglet_l.position = Vector3(-0.92, 0.16, 0.06)
+	winglet_l.rotation_degrees = Vector3(-12.0, 0.0, 24.0)
+	wing_l.add_child(winglet_l)
+
+	var winglet_r := MeshInstance3D.new()
+	winglet_r.mesh = winglet_box
+	winglet_r.material_override = mat_dark_armor
+	winglet_r.position = Vector3(0.92, 0.16, 0.06)
+	winglet_r.rotation_degrees = Vector3(-12.0, 0.0, -24.0)
+	wing_r.add_child(winglet_r)
+
+	var beacon_box := BoxMesh.new()
+	beacon_box.size = Vector3(0.11, 0.07, 0.66)
+	var beacon_l := MeshInstance3D.new()
+	beacon_l.mesh = beacon_box
+	beacon_l.material_override = _wing_strip_mat
+	beacon_l.position = Vector3(0.0, 0.22, 0.0)
+	winglet_l.add_child(beacon_l)
+	_wingtip_beacon_left = beacon_l
+
+	var beacon_r := MeshInstance3D.new()
+	beacon_r.mesh = beacon_box
+	beacon_r.material_override = _wing_strip_mat
+	beacon_r.position = Vector3(0.0, 0.22, 0.0)
+	winglet_r.add_child(beacon_r)
+	_wingtip_beacon_right = beacon_r
+
 	# 5. Наклонные хвостовые стабилизаторы (V-Tail, отлично видны сзади и сверху!)
 	var fin_box := BoxMesh.new()
 	fin_box.size = Vector3(0.10, 0.76, 0.88)
@@ -208,6 +252,15 @@ func _build_glider_3d_model() -> void:
 	nozzle_cyl.height = 0.55
 	nozzle_cyl.radial_segments = 12
 
+	var burner_torus := TorusMesh.new()
+	burner_torus.inner_radius = 0.12
+	burner_torus.outer_radius = 0.21
+	burner_torus.rings = 16
+	burner_torus.ring_segments = 8
+	var mat_burner := StandardMaterial3D.new()
+	mat_burner.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat_burner.albedo_color = Color(0.75, 0.98, 1.0)
+
 	for side_n: float in [-0.30, 0.30]:
 		var nozzle := MeshInstance3D.new()
 		nozzle.mesh = nozzle_cyl
@@ -215,6 +268,13 @@ func _build_glider_3d_model() -> void:
 		nozzle.rotation_degrees = Vector3(90.0, 0.0, 0.0)
 		nozzle.position = Vector3(side_n, 0.0, 1.08)
 		_hull_root.add_child(nozzle)
+
+		var burner_ring := MeshInstance3D.new()
+		burner_ring.mesh = burner_torus
+		burner_ring.material_override = mat_burner
+		burner_ring.rotation_degrees = Vector3(90.0, 0.0, 0.0)
+		burner_ring.position = Vector3(side_n, 0.0, 1.34)
+		_hull_root.add_child(burner_ring)
 
 	_jet_mat = ShaderMaterial.new()
 	var jet_shader := load("res://Shaders/PlasmaJet3D.gdshader") as Shader
@@ -248,24 +308,29 @@ func _build_glider_3d_model() -> void:
 	_engine_light.position = Vector3(0.0, 0.15, 1.65)
 	_hull_root.add_child(_engine_light)
 
+	_muzzle_light = OmniLight3D.new()
+	_muzzle_light.light_color = Color(0.22, 0.95, 1.0)
+	_muzzle_light.light_energy = 0.0
+	_muzzle_light.omni_range = 5.2
+	_muzzle_light.position = Vector3(0.0, 0.12, -1.95)
+	_hull_root.add_child(_muzzle_light)
+
 
 func _build_shield_dome() -> void:
 	_shield_dome = MeshInstance3D.new()
 	var dome_mesh := SphereMesh.new()
 	dome_mesh.radius = 2.15
 	dome_mesh.height = 4.30
-	dome_mesh.radial_segments = 18
-	dome_mesh.rings = 10
+	dome_mesh.radial_segments = 22
+	dome_mesh.rings = 12
 
-	_shield_mat = StandardMaterial3D.new()
-	_shield_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_shield_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	_shield_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-	_shield_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_shield_mat.albedo_color = Color(0.18, 0.88, 1.0, 0.08)
+	_shield_shader_mat = ShaderMaterial.new()
+	_shield_shader_mat.shader = load("res://Shaders/ShieldDome3D.gdshader") as Shader
+	_shield_shader_mat.set_shader_parameter("shield_color", Color(0.20, 0.92, 1.0, 0.45))
+	_shield_shader_mat.set_shader_parameter("intensity", 0.22)
 
 	_shield_dome.mesh = dome_mesh
-	_shield_dome.material_override = _shield_mat
+	_shield_dome.material_override = _shield_shader_mat
 	_shield_dome.scale = Vector3(1.18, 0.65, 1.25)
 	_hull_root.add_child(_shield_dome)
 
@@ -395,7 +460,24 @@ func reset_glider() -> void:
 		_hull_root.rotation = Vector3.ZERO
 	_shield_flash = 0.0
 	_damage_invuln_timer = 0.0
+	_barrel_roll_timer = 0.0
+	_barrel_roll_cd = 0.0
 	hide_quantum_laser()
+
+
+func trigger_barrel_roll(dir_sign: float = 1.0) -> bool:
+	if _barrel_roll_timer > 0.0 or _barrel_roll_cd > 0.0:
+		return false
+	_barrel_roll_timer = BARREL_ROLL_DURATION
+	_barrel_roll_cd = BARREL_ROLL_COOLDOWN
+	_barrel_roll_dir = -1.0 if dir_sign < 0.0 else 1.0
+	_shield_flash = maxf(_shield_flash, 0.72)
+	move_target_by_delta(Vector2(_barrel_roll_dir * 1.45, 0.0))
+	return true
+
+
+func is_barrel_rolling() -> bool:
+	return _barrel_roll_timer > 0.0
 
 
 func set_drones_active(active: bool) -> void:
@@ -410,6 +492,13 @@ func trigger_shield_flash(is_damage: bool = true) -> void:
 	_shield_flash = 1.0
 	if is_damage:
 		_damage_invuln_timer = 1.15
+
+
+func trigger_muzzle_flash(is_heavy: bool = false) -> void:
+	_muzzle_flash_energy = 2.2 if is_heavy else 1.25
+	if _muzzle_light != null:
+		_muzzle_light.light_color = Color(0.25, 1.0, 0.62) if is_heavy else Color(0.20, 0.94, 1.0)
+		_muzzle_light.light_energy = _muzzle_flash_energy
 
 
 func is_damage_invulnerable() -> bool:
@@ -433,13 +522,17 @@ func update_glider(
 	is_hyper: bool,
 	is_tunnel: bool,
 	is_overdrive: bool,
-	shields_count: int
+	_shields_count: int
 ) -> void:
 	_time_accum += delta
 	if _damage_invuln_timer > 0.0:
 		_damage_invuln_timer = maxf(0.0, _damage_invuln_timer - delta)
 	if _shield_flash > 0.0:
 		_shield_flash = maxf(0.0, _shield_flash - delta * 2.4)
+	if _barrel_roll_cd > 0.0:
+		_barrel_roll_cd = maxf(0.0, _barrel_roll_cd - delta)
+	if _barrel_roll_timer > 0.0:
+		_barrel_roll_timer = maxf(0.0, _barrel_roll_timer - delta)
 
 	# Клавиатурное управление плавно сдвигает целевую точку в 3D-плоскости XY
 	if key_input.length_squared() > 0.001:
@@ -465,7 +558,12 @@ func update_glider(
 
 	if _hull_root != null:
 		var rot_lerp: float = clampf(delta * 10.0, 0.0, 1.0)
-		_hull_root.rotation.z = lerp_angle(_hull_root.rotation.z, desired_roll, rot_lerp)
+		if _barrel_roll_timer > 0.0:
+			var roll_t: float = 1.0 - (_barrel_roll_timer / BARREL_ROLL_DURATION)
+			var eased_t: float = roll_t * roll_t * (3.0 - 2.0 * roll_t)
+			_hull_root.rotation.z = desired_roll - _barrel_roll_dir * eased_t * TAU
+		else:
+			_hull_root.rotation.z = lerp_angle(_hull_root.rotation.z, desired_roll, rot_lerp)
 		_hull_root.rotation.x = lerp_angle(_hull_root.rotation.x, desired_pitch, rot_lerp)
 		_hull_root.rotation.y = lerp_angle(_hull_root.rotation.y, desired_yaw, rot_lerp)
 
@@ -492,6 +590,11 @@ func update_glider(
 		_engine_light.light_energy = 2.2 * thrust_lvl
 		_engine_light.light_color = Color(0.32, 1.0, 0.82) if (is_hyper or is_tunnel) else Color(0.20, 0.90, 1.0)
 
+	if _muzzle_flash_energy > 0.0:
+		_muzzle_flash_energy = maxf(0.0, _muzzle_flash_energy - delta * 14.0)
+		if _muzzle_light != null:
+			_muzzle_light.light_energy = _muzzle_flash_energy
+
 	# Цвет неоновых кромок крыльев
 	if _wing_strip_mat != null:
 		if is_hyper or is_tunnel:
@@ -502,20 +605,20 @@ func update_glider(
 		else:
 			_wing_strip_mat.albedo_color = Color(0.22, 0.95, 1.0)
 
-	# Обновляем купол 3D Грави-Щита (вспыхивает при ударе, восстановлении щита или в Гипер-режиме, не закрывая обзор глайдера)
-	if _shield_dome != null and _shield_mat != null:
+	# Обновляем френелевский купол 3D Грави-Щита (вспыхивает контурной волной при ударе, сборе щита или в Гипер-режиме)
+	if _shield_dome != null and _shield_shader_mat != null:
 		var show_dome: bool = _shield_flash > 0.01 or is_hyper or is_tunnel or _damage_invuln_timer > 0.0
 		_shield_dome.visible = show_dome
 		if show_dome:
-			var base_alpha: float = 0.14 if (is_hyper or is_tunnel) else 0.04
-			var flash_alpha: float = _shield_flash * 0.38
-			var pulse: float = 0.03 * sin(_time_accum * 8.0)
-			var shield_col: Color = Color(0.20, 0.92, 1.0)
+			var base_int: float = 0.62 if (is_hyper or is_tunnel) else 0.25
+			var total_int: float = clampf(base_int + _shield_flash * 0.95, 0.0, 1.35)
+			var shield_col := Color(0.20, 0.92, 1.0, 0.52)
 			if _damage_invuln_timer > 0.0:
-				shield_col = Color(1.0, 0.35, 0.52)
+				shield_col = Color(1.0, 0.32, 0.52, 0.65)
 			elif is_hyper or is_tunnel:
-				shield_col = Color(0.32, 1.0, 0.78)
-			_shield_mat.albedo_color = Color(shield_col.r, shield_col.g, shield_col.b, clampf(base_alpha + flash_alpha + pulse, 0.0, 0.55))
+				shield_col = Color(0.32, 1.0, 0.78, 0.60)
+			_shield_shader_mat.set_shader_parameter("shield_color", shield_col)
+			_shield_shader_mat.set_shader_parameter("intensity", total_int)
 
 	# Анимация крыльевых 3D-дронов
 	if _drones_enabled and _drone_left != null and _drone_right != null:
@@ -593,4 +696,16 @@ func get_drone_muzzle_positions() -> Array[Vector3]:
 	return [
 		_drone_left.global_position + Vector3(0.0, 0.0, -0.6),
 		_drone_right.global_position + Vector3(0.0, 0.0, -0.6)
+	]
+
+
+func get_wingtip_positions() -> Array[Vector3]:
+	if _wingtip_beacon_left != null and _wingtip_beacon_right != null:
+		return [
+			_wingtip_beacon_left.global_position + Vector3(0.0, 0.0, 0.25),
+			_wingtip_beacon_right.global_position + Vector3(0.0, 0.0, 0.25)
+		]
+	return [
+		global_position + Vector3(-2.1, 0.1, 0.4),
+		global_position + Vector3(2.1, 0.1, 0.4)
 	]
