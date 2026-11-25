@@ -7,6 +7,7 @@ extends Node3D
 
 const VIEW_W: float = 540.0
 const VIEW_H: float = 960.0
+const MAX_FLOATING_LABELS: int = 24
 
 var _view_w: float = 540.0
 var _view_h: float = 960.0
@@ -31,6 +32,8 @@ var _director: SpawnDirector3D
 
 var _entities_root: Node3D
 var _projectiles_root: Node3D
+var _active_projectiles: Array[WeaponProjectile3D] = []
+var _free_projectiles: Array[WeaponProjectile3D] = []
 
 # Параметры текущего вылета
 var _is_assault_mode: bool = false
@@ -94,6 +97,7 @@ var _flash_rect: ColorRect
 var _edge_flash_panel: Panel
 var _floating_texts_root: Control
 var _floating_labels: Array[Dictionary] = []
+var _free_floating_labels: Array[Label] = []
 var _modal_cards: Array[Dictionary] = []
 
 var _hud_root: Control
@@ -139,6 +143,32 @@ var _toast_panel: PanelContainer
 var _toast_label: Label
 var _toast_tween: Tween
 
+# Стартовый экран прогрева 3D-ресурсов и шейдеров с прогресс-баром
+var _boot_loader_overlay: Control
+var _boot_panel: PanelContainer
+var _lbl_boot_status: Label
+var _bar_boot_load: ProgressBar
+var _boot_step: int = 0
+var _boot_fade_timer: float = 0.0
+var _shader_warmup_node: Node3D = null
+
+# Dirty-check кэш HUD (исключает лишнее форматирование строк и перекраску StyleBoxFlat каждый кадр)
+var _hud_c_score: int = -1
+var _hud_c_wave: int = -1
+var _hud_c_combo: int = -1
+var _hud_c_crystals: int = -1
+var _hud_c_shields: int = -1
+var _hud_c_max_shields: int = -1
+var _hud_c_graze: int = -1
+var _hud_c_sector_mode: int = -1
+var _hud_c_sector_tenths: int = -1
+var _hud_c_sector_idx: int = -1
+var _hud_c_hyper_mode: int = -1
+var _hud_c_hyper_val: int = -1
+var _hud_c_boss_pct: int = -1
+var _hud_c_boss_rage: int = -1
+var _hud_c_slot_val: Array[int] = [-99, -99, -99, -99]
+
 
 func _ready() -> void:
 	randomize()
@@ -167,11 +197,19 @@ func _ready() -> void:
 
 	_setup_camera_3d()
 	_director = SpawnDirector3D.new()
+	_apply_3d_quality_settings()
 	_build_all_ui()
 	_apply_hud_safe_margins()
 	if not get_viewport().size_changed.is_connected(_apply_hud_safe_margins):
 		get_viewport().size_changed.connect(_apply_hud_safe_margins)
 	_enter_menu_state()
+
+
+func _apply_3d_quality_settings() -> void:
+	if _env3d != null:
+		_env3d.set_high_quality_mode(_config.high_quality_3d)
+	if _glider != null:
+		_glider.set_dynamic_lights_enabled(_config.high_quality_3d)
 
 
 func _notification(what: int) -> void:
@@ -297,11 +335,14 @@ func _exit_tree() -> void:
 	_active_touches.clear()
 	_modal_cards.clear()
 	_floating_labels.clear()
+	_free_floating_labels.clear()
 	_hangar_rows.clear()
 	_slot_panels.clear()
 	_slot_labels.clear()
 	_shield_dots.clear()
 	_prev_wingtips.clear()
+	_active_projectiles.clear()
+	_free_projectiles.clear()
 	UiBuilder.clear_static_caches()
 	WeaponProjectile3D.clear_static_caches()
 	SpaceEntity3D.clear_static_caches()
@@ -437,7 +478,7 @@ func _try_perform_barrel_roll(dir_sign: float) -> void:
 func _set_glider_target_from_screen(screen_pos: Vector2) -> void:
 	var vp_size: Vector2 = get_viewport().get_visible_rect().size
 	if vp_size.x <= 1.0 or vp_size.y <= 1.0:
-		vp_size = Vector2(VIEW_W, VIEW_H)
+		vp_size = Vector2(_view_w, _view_h)
 	var nx: float = clampf((screen_pos.x / vp_size.x) * 2.0 - 1.0, -1.0, 1.0)
 	var ny: float = clampf(1.0 - (screen_pos.y / vp_size.y) * 2.0, -1.0, 1.0)
 	if _config.invert_y_axis:
@@ -467,6 +508,7 @@ func _process(delta: float) -> void:
 				esb.border_color = Color(_edge_flash_color.r, _edge_flash_color.g, _edge_flash_color.b, _edge_flash_alpha)
 
 	_update_floating_labels(dt)
+	_update_boot_loader(dt)
 
 	if _state == GameState.MENU:
 		_update_menu_demo_3d(dt)
@@ -676,9 +718,7 @@ func _update_weapons_3d(delta: float, is_overdrive: bool) -> void:
 				var to_lock: Vector3 = (lock_target.global_position - m_pos).normalized()
 				var forward_dir := Vector3(0.0, 0.0, -1.0).lerp(to_lock, 0.38).normalized()
 				bolt_vel = forward_dir * 118.0
-			var p := WeaponProjectile3D.new()
-			_projectiles_root.add_child(p)
-			p.setup_projectile(
+			_spawn_projectile(
 				WeaponProjectile3D.Kind.PLASMA_BASE,
 				m_pos,
 				bolt_vel,
@@ -693,9 +733,7 @@ func _update_weapons_3d(delta: float, is_overdrive: bool) -> void:
 		if _cd_heavy_plasma <= 0.0:
 			_cd_heavy_plasma = 0.42
 			var nose_pos: Vector3 = _glider.get_nose_muzzle_position()
-			var hp_proj := WeaponProjectile3D.new()
-			_projectiles_root.add_child(hp_proj)
-			hp_proj.setup_projectile(
+			_spawn_projectile(
 				WeaponProjectile3D.Kind.PLASMA_HEAVY,
 				nose_pos,
 				Vector3(0.0, 0.0, -108.0),
@@ -711,9 +749,7 @@ func _update_weapons_3d(delta: float, is_overdrive: bool) -> void:
 			_cd_vulcan = 0.11
 			var muzzles_v: Array[Vector3] = _glider.get_muzzle_positions()
 			for m_pos: Vector3 in muzzles_v:
-				var vb := WeaponProjectile3D.new()
-				_projectiles_root.add_child(vb)
-				vb.setup_projectile(
+				_spawn_projectile(
 					WeaponProjectile3D.Kind.VULCAN_BULLET,
 					m_pos + Vector3(0.0, 0.12, -0.2),
 					Vector3(randf_range(-1.4, 1.4), randf_range(-1.0, 1.0), -138.0),
@@ -756,9 +792,7 @@ func _update_weapons_3d(delta: float, is_overdrive: bool) -> void:
 				var side_idx: int = _ammo_missiles % muzzles_m.size()
 				var launch_pos: Vector3 = muzzles_m[side_idx]
 				var side_push: float = -7.0 if side_idx == 0 else 7.0
-				var missile := WeaponProjectile3D.new()
-				_projectiles_root.add_child(missile)
-				missile.setup_projectile(
+				_spawn_projectile(
 					WeaponProjectile3D.Kind.HOMING_MISSILE,
 					launch_pos,
 					Vector3(side_push, 3.5, -82.0),
@@ -775,15 +809,70 @@ func _update_weapons_3d(delta: float, is_overdrive: bool) -> void:
 			_cd_drones = drone_interval
 			var d_muzzles: Array[Vector3] = _glider.get_drone_muzzle_positions()
 			for dm_pos: Vector3 in d_muzzles:
-				var dp := WeaponProjectile3D.new()
-				_projectiles_root.add_child(dp)
-				dp.setup_projectile(
+				var dp: WeaponProjectile3D = _spawn_projectile(
 					WeaponProjectile3D.Kind.PLASMA_BASE,
 					dm_pos,
 					Vector3(0.0, 0.0, -115.0),
 					0.0
 				)
 				dp.damage = 10.0 + float(_config.upg_wing_drones) * 1.5 + dmg_bonus * 0.25
+
+
+func _spawn_projectile(
+	p_kind: WeaponProjectile3D.Kind,
+	start_pos: Vector3,
+	init_vel: Vector3,
+	dmg_bonus: float = 0.0,
+	homing_target: Node3D = null
+) -> WeaponProjectile3D:
+	var proj: WeaponProjectile3D = null
+	while not _free_projectiles.is_empty():
+		var cand: WeaponProjectile3D = _free_projectiles.pop_back()
+		if is_instance_valid(cand):
+			proj = cand
+			break
+	if proj == null:
+		proj = WeaponProjectile3D.new()
+		_projectiles_root.add_child(proj)
+	proj.setup_projectile(p_kind, start_pos, init_vel, dmg_bonus, homing_target)
+	_active_projectiles.append(proj)
+	return proj
+
+
+func _release_projectile_at(active_idx: int) -> void:
+	var proj: WeaponProjectile3D = _active_projectiles[active_idx]
+	var last_idx: int = _active_projectiles.size() - 1
+	if active_idx != last_idx:
+		_active_projectiles[active_idx] = _active_projectiles[last_idx]
+	_active_projectiles.resize(last_idx)
+	if is_instance_valid(proj):
+		proj.deactivate_projectile()
+		_free_projectiles.append(proj)
+
+
+func _clear_enemy_projectiles(spawn_sparks: bool) -> int:
+	var cleared: int = 0
+	var i: int = _active_projectiles.size() - 1
+	while i >= 0:
+		var pr: WeaponProjectile3D = _active_projectiles[i]
+		if pr != null and is_instance_valid(pr) and pr.is_enemy:
+			cleared += 1
+			if spawn_sparks:
+				_fx3d.spawn_hit_spark(pr.global_position, Color(0.24, 1.0, 0.72))
+			_release_projectile_at(i)
+		i -= 1
+	return cleared
+
+
+func _warm_up_projectile_pool(prealloc_count: int = 32) -> void:
+	WeaponProjectile3D.warm_up_resources()
+	var current_total: int = _active_projectiles.size() + _free_projectiles.size()
+	for i: int in range(maxi(0, prealloc_count - current_total)):
+		var pr := WeaponProjectile3D.new()
+		_projectiles_root.add_child(pr)
+		pr.setup_projectile(WeaponProjectile3D.Kind.PLASMA_BASE, Vector3.ZERO, Vector3.FORWARD)
+		pr.deactivate_projectile()
+		_free_projectiles.append(pr)
 
 
 func _find_best_meteor_target(max_dist_z: float, max_xy_offset: float) -> SpaceEntity3D:
@@ -829,16 +918,21 @@ func _find_chain_laser_target(primary: SpaceEntity3D, max_chain_dist: float) -> 
 func _update_projectiles_3d(delta: float) -> void:
 	var g_pos: Vector3 = _glider.global_position
 	var is_warp_invuln: bool = (_hyper_timer > 0.0 or _tunnel_timer > 0.0)
+	var entities_list: Array[Node] = _entities_root.get_children()
 
-	for child: Node in _projectiles_root.get_children():
-		var proj := child as WeaponProjectile3D
-		if proj == null:
+	var i: int = _active_projectiles.size() - 1
+	while i >= 0:
+		var proj: WeaponProjectile3D = _active_projectiles[i]
+		if not is_instance_valid(proj) or not proj.is_active:
+			_release_projectile_at(i)
+			i -= 1
 			continue
 		if not proj.update_projectile(delta):
-			proj.queue_free()
+			_release_projectile_at(i)
+			i -= 1
 			continue
 
-		var p_pos: Vector3 = proj.global_position
+		var p_pos: Vector3 = proj.position
 
 		# Если это вражеский плазменный снаряд — проверяем отражение 360°-Бочкой или попадание по 3D-глайдеру
 		if proj.is_enemy:
@@ -859,25 +953,27 @@ func _update_projectiles_3d(delta: float) -> void:
 				_audio.play_graze(_combo)
 				_fx3d.spawn_hit_spark(p_pos, Color(1.0, 0.88, 0.28))
 				_spawn_floating_3d_text(p_pos, "РИКОШЕТ БОЧКОЙ +%d!" % def_pts, Color(1.0, 0.88, 0.30))
+				i -= 1
 				continue
 			if d_to_glider <= proj.hit_radius + 1.25:
-				proj.queue_free()
+				_release_projectile_at(i)
 				if not is_warp_invuln and not _glider.is_barrel_rolling():
 					_damage_glider_shield(p_pos)
 				else:
 					_fx3d.spawn_hit_spark(p_pos, Color(0.32, 1.0, 0.78))
+			i -= 1
 			continue
 
 		# Проверка попадания 3D-снаряда глайдера в метеориты, катера и 3D-боссов
 		var hit_any: bool = false
-		for e_child: Node in _entities_root.get_children():
+		for e_child: Node in entities_list:
 			var ent := e_child as SpaceEntity3D
 			if ent == null or not ent.is_hostile() or ent.is_destroyed or ent.is_queued_for_deletion():
 				continue
 			var combined_r: float = proj.hit_radius + ent.radius
 			if absf(p_pos.z - ent.position.z) > combined_r + 0.5:
 				continue
-			if p_pos.distance_squared_to(ent.global_position) <= combined_r * combined_r:
+			if p_pos.distance_squared_to(ent.position) <= combined_r * combined_r:
 				hit_any = true
 				var spark_col := Color(0.28, 1.0, 0.62) if proj.kind == WeaponProjectile3D.Kind.PLASMA_HEAVY else Color(0.22, 0.94, 1.0)
 				_fx3d.spawn_hit_spark(p_pos, spark_col)
@@ -895,7 +991,8 @@ func _update_projectiles_3d(delta: float) -> void:
 				break
 
 		if hit_any:
-			proj.queue_free()
+			_release_projectile_at(i)
+		i -= 1
 
 
 func _apply_aoe_explosion(center: Vector3, radius: float, aoe_dmg: float, col: Color) -> void:
@@ -946,10 +1043,7 @@ func _on_meteor_destroyed(ent: SpaceEntity3D) -> void:
 		_trigger_screen_flash(Color(1.0, 0.32, 0.55), 0.48)
 		_show_banner(ent.boss_title + " УНИЧТОЖЕН! ОТКРЫТА 3D ЧЁРНАЯ ДЫРА!", Color(1.0, 0.88, 0.30), 3.4)
 		# Очищаем вражеские снаряды и открываем портал 3D Чёрной дыры прямо по курсу!
-		for p_node: Node in _projectiles_root.get_children():
-			var pr := p_node as WeaponProjectile3D
-			if pr != null and pr.is_enemy:
-				pr.queue_free()
+		_clear_enemy_projectiles(false)
 		var bh := SpaceEntity3D.new()
 		_entities_root.add_child(bh)
 		bh.setup_entity(SpaceEntity3D.Kind.BLACK_HOLE_PORTAL, Vector3(0.0, 1.2, -52.0), _base_forward_speed, 4.6, _wave)
@@ -1101,18 +1195,14 @@ func _fire_enemy_weapons_3d(ent: SpaceEntity3D) -> void:
 
 	_audio.play_enemy_fire()
 	if ent.kind == SpaceEntity3D.Kind.ENEMY_INTERCEPTOR:
-		var bolt := WeaponProjectile3D.new()
-		_projectiles_root.add_child(bolt)
-		bolt.setup_projectile(WeaponProjectile3D.Kind.ENEMY_PLASMA_BOLT, start_pos, to_player * 56.0)
+		_spawn_projectile(WeaponProjectile3D.Kind.ENEMY_PLASMA_BOLT, start_pos, to_player * 56.0)
 	elif ent.kind == SpaceEntity3D.Kind.ENEMY_BOSS_3D:
 		ent.attack_counter += 1
 		var fan_count: int = 5 if ent.boss_enraged else 3
 		for i: int in range(fan_count):
 			var spread: float = (float(i) - float(fan_count - 1) * 0.5) * 0.14
 			var dir := Vector3(to_player.x + spread, to_player.y + (ent.attack_counter % 2 - 0.5) * 0.06, to_player.z).normalized()
-			var b := WeaponProjectile3D.new()
-			_projectiles_root.add_child(b)
-			b.setup_projectile(WeaponProjectile3D.Kind.ENEMY_PLASMA_BOLT, start_pos + Vector3(spread * 6.0, 0.0, 0.0), dir * 60.0)
+			_spawn_projectile(WeaponProjectile3D.Kind.ENEMY_PLASMA_BOLT, start_pos + Vector3(spread * 6.0, 0.0, 0.0), dir * 60.0)
 
 
 func _collect_orb(ent: SpaceEntity3D) -> void:
@@ -1135,13 +1225,7 @@ func _collect_orb(ent: SpaceEntity3D) -> void:
 			_spawn_floating_3d_text(pos, "+28% ГИПЕР-ЯДРО!", Color(0.96, 0.35, 1.0))
 		SpaceEntity3D.Kind.ORB_SHIELD:
 			# 3D ЭМИ-Импульс испаряет все вражеские плазменные снаряды в пространстве!
-			var cleared_bolts: int = 0
-			for p_child: Node in _projectiles_root.get_children():
-				var pr := p_child as WeaponProjectile3D
-				if pr != null and pr.is_enemy and not pr.is_queued_for_deletion():
-					cleared_bolts += 1
-					_fx3d.spawn_hit_spark(pr.global_position, Color(0.24, 1.0, 0.72))
-					pr.queue_free()
+			var cleared_bolts: int = _clear_enemy_projectiles(true)
 
 			if _shields < _max_shields:
 				_shields += 1
@@ -1155,12 +1239,14 @@ func _collect_orb(ent: SpaceEntity3D) -> void:
 			_glider.trigger_shield_flash(false)
 			_audio.play_shield_restore()
 		SpaceEntity3D.Kind.ORB_QUANTUM_CRYSTAL:
-			_run_crystals += 1
-			_config.add_crystals(1, false)
+			var cr_val: int = maxi(1, ent.crystal_value)
+			_run_crystals += cr_val
+			_config.add_crystals(cr_val, false)
 			_crystals_dirty_save = true
-			_score += 60 * _combo
+			_score += 60 * cr_val * _combo
 			_audio.play_orb_pickup(true, _combo)
-			_spawn_floating_3d_text(pos, "+1 КР", Color(0.45, 0.95, 1.0))
+			var cr_col: Color = Color(1.0, 0.88, 0.28) if cr_val > 1 else Color(0.45, 0.95, 1.0)
+			_spawn_floating_3d_text(pos, "+%d КР" % cr_val, cr_col)
 		SpaceEntity3D.Kind.ORB_WEAPON_PLASMA:
 			_timer_heavy_plasma = minf(38.0 * ammo_mult, _timer_heavy_plasma + 16.0 * ammo_mult)
 			_audio.play_weapon_pickup()
@@ -1319,17 +1405,42 @@ func _spawn_floating_3d_text(world_pos: Vector3, text: String, col: Color) -> vo
 		return
 	if _camera.is_position_behind(world_pos):
 		return
+	while _floating_labels.size() >= MAX_FLOATING_LABELS:
+		var oldest: Dictionary = _floating_labels[0]
+		var old_lbl := oldest.get("label") as Label
+		_release_floating_label(old_lbl)
+		_floating_labels.remove_at(0)
+
 	var screen_pt: Vector2 = _camera.unproject_position(world_pos)
-	var lbl := UiBuilder.create_label(text, 15, col, HORIZONTAL_ALIGNMENT_CENTER, 3)
+	var lbl: Label = null
+	while not _free_floating_labels.is_empty():
+		var cand: Label = _free_floating_labels.pop_back()
+		if is_instance_valid(cand):
+			lbl = cand
+			break
+	if lbl == null:
+		lbl = UiBuilder.create_label(text, 15, col, HORIZONTAL_ALIGNMENT_CENTER, 3)
+		lbl.custom_minimum_size = Vector2(180.0, 24.0)
+		_floating_texts_root.add_child(lbl)
+	else:
+		lbl.text = text
+		lbl.add_theme_color_override("font_color", col)
+		lbl.visible = true
+
+	lbl.modulate = Color.WHITE
 	lbl.position = screen_pt - Vector2(90.0, 12.0)
-	lbl.custom_minimum_size = Vector2(180.0, 24.0)
-	_floating_texts_root.add_child(lbl)
 	_floating_labels.append({
 		"label": lbl,
 		"age": 0.0,
 		"duration": 0.85,
 		"color": col
 	})
+
+
+func _release_floating_label(lbl: Label) -> void:
+	if lbl != null and is_instance_valid(lbl):
+		lbl.visible = false
+		_free_floating_labels.append(lbl)
 
 
 func _update_floating_labels(delta: float) -> void:
@@ -1344,7 +1455,7 @@ func _update_floating_labels(delta: float) -> void:
 		var age: float = float(item["age"]) + delta
 		var dur: float = float(item["duration"])
 		if age >= dur:
-			lbl.queue_free()
+			_release_floating_label(lbl)
 			_floating_labels.remove_at(i)
 			i -= 1
 			continue
@@ -1360,15 +1471,18 @@ func _update_floating_labels(delta: float) -> void:
 # ============================================================================
 
 func _clear_world_entities() -> void:
+	Engine.time_scale = 1.0
+	_slowmo_timer = 0.0
 	for c: Node in _entities_root.get_children():
 		c.queue_free()
-	for c: Node in _projectiles_root.get_children():
-		c.queue_free()
+	var p_i: int = _active_projectiles.size() - 1
+	while p_i >= 0:
+		_release_projectile_at(p_i)
+		p_i -= 1
 	_fx3d.clear_all()
 	for item: Dictionary in _floating_labels:
 		var lbl := item.get("label") as Label
-		if is_instance_valid(lbl):
-			lbl.queue_free()
+		_release_floating_label(lbl)
 	_floating_labels.clear()
 
 
@@ -1387,10 +1501,12 @@ func _enter_menu_state() -> void:
 
 
 func _start_new_run() -> void:
+	_finish_boot_loader_immediately()
 	_audio.play_ui_click()
 	_clear_world_entities()
 	_glider.reset_glider()
 	_glider.set_drones_active(_config.upg_wing_drones > 0)
+	_reset_hud_cache()
 
 	_state = GameState.PLAYING
 	_score = 0
@@ -1441,6 +1557,8 @@ func _start_new_run() -> void:
 func _toggle_pause(paused: bool) -> void:
 	_audio.play_ui_click()
 	if paused and _state == GameState.PLAYING:
+		Engine.time_scale = 1.0
+		_slowmo_timer = 0.0
 		_bank_uncommitted_credits()
 		_state = GameState.PAUSED
 		_pause_overlay.visible = true
@@ -1451,6 +1569,8 @@ func _toggle_pause(paused: bool) -> void:
 
 
 func _trigger_game_over() -> void:
+	Engine.time_scale = 1.0
+	_slowmo_timer = 0.0
 	_state = GameState.GAME_OVER
 	_audio.play_game_over()
 	_audio.set_hyper_mode(false)
@@ -1520,6 +1640,127 @@ func _build_all_ui() -> void:
 	_build_hangar_overlay()
 	_build_settings_overlay()
 	_build_toast_ui()
+	_build_boot_loader_ui()
+
+
+func _build_boot_loader_ui() -> void:
+	_boot_loader_overlay = Control.new()
+	_boot_loader_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_boot_loader_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	_ui_root.add_child(_boot_loader_overlay)
+
+	var bg_tex_rect := TextureRect.new()
+	bg_tex_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	bg_tex_rect.texture = load("res://Assets/Sprites/SplashScreen.png") as Texture2D
+	bg_tex_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	bg_tex_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	_boot_loader_overlay.add_child(bg_tex_rect)
+
+	_boot_panel = UiBuilder.create_glass_panel(
+		Color(0.015, 0.045, 0.12, 0.92),
+		Color(0.28, 0.96, 1.0, 0.88),
+		14,
+		18.0,
+		12.0
+	)
+	_boot_panel.position = Vector2(34.0, VIEW_H - 148.0)
+	_boot_panel.size = Vector2(VIEW_W - 68.0, 82.0)
+	_boot_loader_overlay.add_child(_boot_panel)
+
+	var b_vbox := VBoxContainer.new()
+	b_vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	b_vbox.add_theme_constant_override("separation", 8)
+	_boot_panel.add_child(b_vbox)
+
+	_lbl_boot_status = UiBuilder.create_label(
+		"ИНИЦИАЛИЗАЦИЯ 3D-СИСТЕМ... 10%",
+		14,
+		Color(0.84, 0.98, 1.0),
+		HORIZONTAL_ALIGNMENT_CENTER,
+		3
+	)
+	b_vbox.add_child(_lbl_boot_status)
+
+	_bar_boot_load = ProgressBar.new()
+	_bar_boot_load.min_value = 0.0
+	_bar_boot_load.max_value = 100.0
+	_bar_boot_load.value = 10.0
+	_bar_boot_load.show_percentage = false
+	_bar_boot_load.custom_minimum_size = Vector2(0.0, 14.0)
+
+	var sb_bg := StyleBoxFlat.new()
+	sb_bg.bg_color = Color(0.01, 0.03, 0.08, 0.95)
+	sb_bg.border_color = Color(0.20, 0.72, 0.92, 0.65)
+	sb_bg.set_border_width_all(1)
+	sb_bg.set_corner_radius_all(7)
+	_bar_boot_load.add_theme_stylebox_override("background", sb_bg)
+
+	var sb_fg := StyleBoxFlat.new()
+	sb_fg.bg_color = Color(0.18, 0.96, 0.84, 0.98)
+	sb_fg.set_corner_radius_all(7)
+	_bar_boot_load.add_theme_stylebox_override("fill", sb_fg)
+	b_vbox.add_child(_bar_boot_load)
+
+	_boot_step = 0
+	_boot_fade_timer = 0.0
+
+
+func _update_boot_loader(delta: float) -> void:
+	if _boot_loader_overlay == null or not _boot_loader_overlay.visible:
+		return
+
+	if _boot_step == 0:
+		_lbl_boot_status.text = "ГЕНЕРАЦИЯ 3D-МЕТЕОРИТОВ И КРИСТАЛЛОВ... 25%"
+		_bar_boot_load.value = 25.0
+		_boot_step = 1
+	elif _boot_step == 1:
+		SpaceEntity3D.warm_up_assets()
+		_lbl_boot_status.text = "ЗАРЯДКА ПУЛА ПЛАЗМЕННЫХ ОРУДИЙ... 52%"
+		_bar_boot_load.value = 52.0
+		_boot_step = 2
+	elif _boot_step == 2:
+		_warm_up_projectile_pool(32)
+		_lbl_boot_status.text = "ПОДГОТОВКА ПУЛА 3D-СПЕЦЭФФЕКТОВ... 76%"
+		_bar_boot_load.value = 76.0
+		_boot_step = 3
+	elif _boot_step == 3:
+		_fx3d.warm_up_pool(42)
+		# Помещаем мини-кластер всех 3D-шейдеров перед камерой за экраном загрузки на 1 кадр для компиляции PSO Vulkan
+		_shader_warmup_node = SpaceEntity3D.build_shader_warmup_cluster()
+		_shader_warmup_node.position = Vector3(0.0, 0.5, -10.0)
+		add_child(_shader_warmup_node)
+		_lbl_boot_status.text = "КОМПИЛЯЦИЯ 3D-ШЕЙДЕРОВ... 94%"
+		_bar_boot_load.value = 94.0
+		_boot_step = 4
+	elif _boot_step == 4:
+		if _shader_warmup_node != null and is_instance_valid(_shader_warmup_node):
+			_shader_warmup_node.queue_free()
+			_shader_warmup_node = null
+		_lbl_boot_status.text = "СИСТЕМЫ ГОТОВЫ К ВЗЛЁТУ! 100%"
+		_bar_boot_load.value = 100.0
+		_boot_fade_timer = 0.26
+		_boot_step = 5
+	elif _boot_step == 5:
+		_boot_fade_timer -= delta
+		if _boot_fade_timer <= 0.0:
+			_boot_loader_overlay.visible = false
+			_boot_loader_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		else:
+			_boot_loader_overlay.modulate.a = clampf(_boot_fade_timer / 0.26, 0.0, 1.0)
+
+
+func _finish_boot_loader_immediately() -> void:
+	if _boot_step < 5:
+		SpaceEntity3D.warm_up_assets()
+		_warm_up_projectile_pool(32)
+		_fx3d.warm_up_pool(42)
+		if _shader_warmup_node != null and is_instance_valid(_shader_warmup_node):
+			_shader_warmup_node.queue_free()
+			_shader_warmup_node = null
+		_boot_step = 5
+	if _boot_loader_overlay != null:
+		_boot_loader_overlay.visible = false
+		_boot_loader_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 
 func _apply_hud_safe_margins() -> void:
@@ -1567,6 +1808,9 @@ func _apply_hud_safe_margins() -> void:
 	if _toast_panel != null:
 		_toast_panel.position = Vector2(50.0, _view_h - 115.0 - _safe_bot_vp)
 		_toast_panel.size = Vector2(_view_w - 100.0, 50.0)
+	if _boot_panel != null:
+		_boot_panel.position = Vector2(34.0, _view_h - 148.0 - _safe_bot_vp)
+		_boot_panel.size = Vector2(_view_w - 68.0, 82.0)
 
 	_relayout_modal_cards()
 
@@ -1769,60 +2013,125 @@ func _build_hud_ui() -> void:
 	boss_vbox.add_child(_bar_boss_hp)
 
 
+func _reset_hud_cache() -> void:
+	_hud_c_score = -1
+	_hud_c_wave = -1
+	_hud_c_combo = -1
+	_hud_c_crystals = -1
+	_hud_c_shields = -1
+	_hud_c_max_shields = -1
+	_hud_c_graze = -1
+	_hud_c_sector_mode = -1
+	_hud_c_sector_tenths = -1
+	_hud_c_sector_idx = -1
+	_hud_c_hyper_mode = -1
+	_hud_c_hyper_val = -1
+	_hud_c_boss_pct = -1
+	_hud_c_boss_rage = -1
+	_hud_c_slot_val = [-99, -99, -99, -99]
+
+
 func _update_hud_ui() -> void:
 	if _hud_root == null or not _hud_root.visible:
 		return
 
-	_lbl_score.text = "СЧЁТ: %d" % _score
-	_lbl_wave.text = "ВОЛНА %d" % _wave
-	_lbl_combo.text = "КОМБО x%d  •  %d КР" % [_combo, _run_crystals]
+	if _score != _hud_c_score:
+		_hud_c_score = _score
+		_lbl_score.text = "СЧЁТ: %d" % _score
+	if _wave != _hud_c_wave:
+		_hud_c_wave = _wave
+		_lbl_wave.text = "ВОЛНА %d" % _wave
+	if _combo != _hud_c_combo or _run_crystals != _hud_c_crystals:
+		_hud_c_combo = _combo
+		_hud_c_crystals = _run_crystals
+		_lbl_combo.text = "КОМБО x%d  •  %d КР" % [_combo, _run_crystals]
 
-	for i: int in range(_shield_dots.size()):
-		var dot: ColorRect = _shield_dots[i]
-		dot.visible = i < _max_shields
-		if i < _shields:
-			dot.color = Color(0.22, 0.98, 0.76, 1.0)
-		else:
-			dot.color = Color(0.12, 0.24, 0.34, 0.65)
+	if _shields != _hud_c_shields or _max_shields != _hud_c_max_shields:
+		_hud_c_shields = _shields
+		_hud_c_max_shields = _max_shields
+		for i: int in range(_shield_dots.size()):
+			var dot: ColorRect = _shield_dots[i]
+			dot.visible = i < _max_shields
+			if i < _shields:
+				dot.color = Color(0.22, 0.98, 0.76, 1.0)
+			else:
+				dot.color = Color(0.12, 0.24, 0.34, 0.65)
 
-	if _lbl_graze_progress != null:
+	if _lbl_graze_progress != null and _graze_shield_progress != _hud_c_graze:
+		_hud_c_graze = _graze_shield_progress
 		_lbl_graze_progress.text = " • ГРАНЬ %d/5" % _graze_shield_progress
 
-	if _tunnel_timer > 0.0:
-		_lbl_sector.text = "3D ГИПЕР-ТУННЕЛЬ ЧЁРНОЙ ДЫРЫ: %.1f СЕК" % _tunnel_timer
-	elif _hyper_timer > 0.0:
-		_lbl_sector.text = "ГИПЕРСКОРОСТЬ АКТИВНА: %.1f СЕК" % _hyper_timer
-	else:
-		_lbl_sector.text = _env3d.get_current_sector_name()
+	var sec_mode: int = 2 if _tunnel_timer > 0.0 else (1 if _hyper_timer > 0.0 else 0)
+	var sec_tenths: int = int(round((_tunnel_timer if sec_mode == 2 else _hyper_timer) * 10.0))
+	if sec_mode != _hud_c_sector_mode or (sec_mode > 0 and sec_tenths != _hud_c_sector_tenths) or (sec_mode == 0 and _sector_index != _hud_c_sector_idx):
+		_hud_c_sector_mode = sec_mode
+		_hud_c_sector_tenths = sec_tenths
+		_hud_c_sector_idx = _sector_index
+		if sec_mode == 2:
+			_lbl_sector.text = "3D ГИПЕР-ТУННЕЛЬ ЧЁРНОЙ ДЫРЫ: %.1f СЕК" % (float(sec_tenths) * 0.1)
+		elif sec_mode == 1:
+			_lbl_sector.text = "ГИПЕРСКОРОСТЬ АКТИВНА: %.1f СЕК" % (float(sec_tenths) * 0.1)
+		else:
+			_lbl_sector.text = _env3d.get_current_sector_name()
 
 	if _boss_hud_panel != null:
 		var has_b: bool = is_instance_valid(_active_boss) and not _active_boss.is_destroyed and not _active_boss.is_queued_for_deletion()
-		_boss_hud_panel.visible = has_b
+		if _boss_hud_panel.visible != has_b:
+			_boss_hud_panel.visible = has_b
+			if not has_b:
+				_hud_c_boss_pct = -1
 		if has_b:
 			var pct: float = clampf((_active_boss.hp / maxf(1.0, _active_boss.max_hp)) * 100.0, 0.0, 100.0)
 			_bar_boss_hp.value = pct
-			var rage_str: String = " [ЯРОСТЬ]" if _active_boss.boss_enraged else ""
-			_lbl_boss_title.text = "%s%s — %d%%" % [_active_boss.boss_title, rage_str, int(ceil(pct))]
+			var pct_int: int = int(ceil(pct))
+			var rage_int: int = 1 if _active_boss.boss_enraged else 0
+			if pct_int != _hud_c_boss_pct or rage_int != _hud_c_boss_rage:
+				_hud_c_boss_pct = pct_int
+				_hud_c_boss_rage = rage_int
+				var rage_str: String = " [ЯРОСТЬ]" if rage_int == 1 else ""
+				_lbl_boss_title.text = "%s%s — %d%%" % [_active_boss.boss_title, rage_str, pct_int]
 
-	# Обновляем 4 слота оружия
-	_update_weapon_slot_ui(0, "ПЛАЗМА+", _timer_heavy_plasma > 0.0, "%.0fс" % ceil(_timer_heavy_plasma), Color(0.28, 1.0, 0.55))
-	_update_weapon_slot_ui(1, "ВУЛКАН", _timer_vulcan > 0.0, "%.0fс" % ceil(_timer_vulcan), Color(1.0, 0.85, 0.25))
-	_update_weapon_slot_ui(2, "3D-ЛАЗЕР", _timer_laser > 0.0, "%.0fс" % ceil(_timer_laser), Color(0.25, 0.96, 1.0))
-	_update_weapon_slot_ui(3, "РАКЕТЫ", _ammo_missiles > 0, "x%d" % _ammo_missiles, Color(1.0, 0.42, 0.32))
+	# Обновляем 4 слота оружия только при изменении целых секунд / боезапаса
+	var s0: int = int(ceil(_timer_heavy_plasma)) if _timer_heavy_plasma > 0.0 else 0
+	var s1: int = int(ceil(_timer_vulcan)) if _timer_vulcan > 0.0 else 0
+	var s2: int = int(ceil(_timer_laser)) if _timer_laser > 0.0 else 0
+	var s3: int = _ammo_missiles if _ammo_missiles > 0 else 0
+	if s0 != _hud_c_slot_val[0]:
+		_hud_c_slot_val[0] = s0
+		_update_weapon_slot_ui(0, "ПЛАЗМА+", s0 > 0, "%dс" % s0, Color(0.28, 1.0, 0.55))
+	if s1 != _hud_c_slot_val[1]:
+		_hud_c_slot_val[1] = s1
+		_update_weapon_slot_ui(1, "ВУЛКАН", s1 > 0, "%dс" % s1, Color(1.0, 0.85, 0.25))
+	if s2 != _hud_c_slot_val[2]:
+		_hud_c_slot_val[2] = s2
+		_update_weapon_slot_ui(2, "3D-ЛАЗЕР", s2 > 0, "%dс" % s2, Color(0.25, 0.96, 1.0))
+	if s3 != _hud_c_slot_val[3]:
+		_hud_c_slot_val[3] = s3
+		_update_weapon_slot_ui(3, "РАКЕТЫ", s3 > 0, "x%d" % s3, Color(1.0, 0.42, 0.32))
 
 	_bar_hyper.value = 100.0 if (_hyper_timer > 0.0 or _tunnel_timer > 0.0) else _hyper_charge
-	if _tunnel_timer > 0.0:
-		_btn_hyper.text = "ГИПЕР-ТУННЕЛЬ %.1fС" % _tunnel_timer
-		UiBuilder.apply_button_colors(_btn_hyper, Color(0.32, 0.10, 0.55, 0.96), Color(0.92, 0.45, 1.0, 1.0))
-	elif _hyper_timer > 0.0:
-		_btn_hyper.text = "ГИПЕРСКОРОСТЬ %.1fС" % _hyper_timer
-		UiBuilder.apply_button_colors(_btn_hyper, Color(0.06, 0.48, 0.38, 0.96), Color(0.35, 1.0, 0.82, 1.0))
-	elif _hyper_charge >= 100.0:
-		_btn_hyper.text = "ПУСК ГИПЕР-ЯДРА! [SPACE]"
-		UiBuilder.apply_button_colors(_btn_hyper, Color(0.08, 0.52, 0.42, 0.98), Color(0.42, 1.0, 0.84, 1.0))
-	else:
-		_btn_hyper.text = "ГИПЕР-ЯДРО %d%%" % int(round(_hyper_charge))
-		UiBuilder.apply_button_colors(_btn_hyper, Color(0.05, 0.16, 0.28, 0.92), Color(0.24, 0.78, 0.96, 0.70))
+	var h_mode: int = 3 if _tunnel_timer > 0.0 else (2 if _hyper_timer > 0.0 else (1 if _hyper_charge >= 100.0 else 0))
+	var h_val: int = int(round(_tunnel_timer * 10.0)) if h_mode == 3 else (int(round(_hyper_timer * 10.0)) if h_mode == 2 else int(round(_hyper_charge)))
+	if h_mode != _hud_c_hyper_mode or h_val != _hud_c_hyper_val:
+		var mode_changed: bool = (h_mode != _hud_c_hyper_mode)
+		_hud_c_hyper_mode = h_mode
+		_hud_c_hyper_val = h_val
+		if h_mode == 3:
+			_btn_hyper.text = "ГИПЕР-ТУННЕЛЬ %.1fС" % (float(h_val) * 0.1)
+			if mode_changed:
+				UiBuilder.apply_button_colors(_btn_hyper, Color(0.32, 0.10, 0.55, 0.96), Color(0.92, 0.45, 1.0, 1.0))
+		elif h_mode == 2:
+			_btn_hyper.text = "ГИПЕРСКОРОСТЬ %.1fС" % (float(h_val) * 0.1)
+			if mode_changed:
+				UiBuilder.apply_button_colors(_btn_hyper, Color(0.06, 0.48, 0.38, 0.96), Color(0.35, 1.0, 0.82, 1.0))
+		elif h_mode == 1:
+			_btn_hyper.text = "ПУСК ГИПЕР-ЯДРА! [SPACE]"
+			if mode_changed:
+				UiBuilder.apply_button_colors(_btn_hyper, Color(0.08, 0.52, 0.42, 0.98), Color(0.42, 1.0, 0.84, 1.0))
+		else:
+			_btn_hyper.text = "ГИПЕР-ЯДРО %d%%" % h_val
+			if mode_changed:
+				UiBuilder.apply_button_colors(_btn_hyper, Color(0.05, 0.16, 0.28, 0.92), Color(0.24, 0.78, 0.96, 0.70))
 
 
 func _update_weapon_slot_ui(idx: int, title: String, active: bool, val_str: String, active_col: Color) -> void:
@@ -2188,14 +2497,14 @@ func _build_settings_overlay() -> void:
 		VIEW_W,
 		VIEW_H,
 		22.0,
-		660.0,
+		720.0,
 		Color(0.02, 0.05, 0.14, 0.96),
 		Color(0.32, 0.92, 1.0, 0.90),
 		Color(0.01, 0.02, 0.06, 0.86),
-		10
+		9
 	)
 	_settings_overlay = modal["root"]
-	_modal_cards.append({"card": modal["card"], "margin_x": 22.0, "card_h": 660.0})
+	_modal_cards.append({"card": modal["card"], "margin_x": 22.0, "card_h": 720.0})
 	var vbox: VBoxContainer = modal["vbox"]
 
 	vbox.add_child(UiBuilder.create_label("НАСТРОЙКИ 3D И АУДИО", 22, Color(0.38, 0.96, 1.0), HORIZONTAL_ALIGNMENT_CENTER, 3))
@@ -2293,11 +2602,26 @@ func _build_settings_overlay() -> void:
 		_config.save_data()
 	)
 
+	# Переключатель качества 3D-эффектов (Glow / MSAA 2x / свет) для экономии батареи и слабых GPU
+	var btn_quality := UiBuilder.create_secondary_button(
+		"3D-ГРАФИКА (GLOW / MSAA): " + ("МАКС" if _config.high_quality_3d else "ЭКОНОМ"),
+		44.0,
+		14
+	)
+	btn_quality.pressed.connect(func() -> void:
+		_audio.play_ui_click()
+		_config.high_quality_3d = not _config.high_quality_3d
+		btn_quality.text = "3D-ГРАФИКА (GLOW / MSAA): " + ("МАКС" if _config.high_quality_3d else "ЭКОНОМ")
+		_apply_3d_quality_settings()
+		_config.save_data()
+	)
+	vbox.add_child(btn_quality)
+
 	# Переключатель инверсии оси Y
 	var btn_invert_y := UiBuilder.create_secondary_button(
 		"ИНВЕРСИЯ ВЕРТИКАЛИ (ОСЬ Y): " + ("ВКЛ" if _config.invert_y_axis else "ВЫКЛ"),
-		46.0,
-		15
+		44.0,
+		14
 	)
 	btn_invert_y.pressed.connect(func() -> void:
 		_audio.play_ui_click()

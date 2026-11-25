@@ -488,6 +488,13 @@ func set_drones_active(active: bool) -> void:
 		_drone_right.visible = active
 
 
+func set_dynamic_lights_enabled(enabled: bool) -> void:
+	if _engine_light != null:
+		_engine_light.visible = enabled
+	if _muzzle_light != null:
+		_muzzle_light.visible = enabled
+
+
 func trigger_shield_flash(is_damage: bool = true) -> void:
 	_shield_flash = 1.0
 	if is_damage:

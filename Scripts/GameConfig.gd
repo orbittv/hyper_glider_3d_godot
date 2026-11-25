@@ -19,6 +19,7 @@ var bg_brightness: float = 0.85 # Яркость туманности и кос�
 var vibration_enabled: bool = true
 var swipe_control_enabled: bool = true
 var invert_y_axis: bool = false
+var high_quality_3d: bool = true # Glow + MSAA 2x + динамический свет глайдера (ВЫКЛ = Эконом GPU/батареи)
 
 var high_score_arcade: int = 0
 var high_score_assault: int = 0
@@ -50,6 +51,7 @@ func load_data() -> void:
 	vibration_enabled = bool(cfg.get_value("feel", "vibration_enabled", true))
 	swipe_control_enabled = bool(cfg.get_value("feel", "swipe_control_enabled", true))
 	invert_y_axis = bool(cfg.get_value("feel", "invert_y_axis", false))
+	high_quality_3d = bool(cfg.get_value("feel", "high_quality_3d", true))
 
 	high_score_arcade = maxi(0, int(cfg.get_value("records", "high_score_arcade", 0)))
 	high_score_assault = maxi(0, int(cfg.get_value("records", "high_score_assault", 0)))
@@ -83,6 +85,7 @@ func save_data() -> void:
 	cfg.set_value("feel", "vibration_enabled", vibration_enabled)
 	cfg.set_value("feel", "swipe_control_enabled", swipe_control_enabled)
 	cfg.set_value("feel", "invert_y_axis", invert_y_axis)
+	cfg.set_value("feel", "high_quality_3d", high_quality_3d)
 
 	cfg.set_value("records", "high_score_arcade", high_score_arcade)
 	cfg.set_value("records", "high_score_assault", high_score_assault)

@@ -130,6 +130,16 @@ func clear_all() -> void:
 	_effects.clear()
 
 
+func warm_up_pool(prealloc_count: int = 36) -> void:
+	_ensure_meshes()
+	var created: Array[MeshInstance3D] = []
+	for i: int in range(prealloc_count):
+		var pair: Dictionary = _acquire_fx_node(_sphere_mesh)
+		created.append(pair["node"] as MeshInstance3D)
+	for mi: MeshInstance3D in created:
+		_release_fx_node(mi)
+
+
 func spawn_meteor_explosion(world_pos: Vector3, base_radius: float, glow_col: Color, is_bomb: bool = false) -> void:
 	_ensure_meshes()
 

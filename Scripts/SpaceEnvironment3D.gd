@@ -341,6 +341,14 @@ func set_brightness(val: float) -> void:
 		_sky_mat.set_shader_parameter("brightness", _current_brightness)
 
 
+func set_high_quality_mode(enabled: bool) -> void:
+	if _world_env != null and _world_env.environment != null:
+		_world_env.environment.glow_enabled = enabled
+	var vp: Viewport = get_viewport()
+	if vp != null:
+		vp.msaa_3d = Viewport.MSAA_2X if enabled else Viewport.MSAA_DISABLED
+
+
 func set_sector_palette(sector_idx: int) -> void:
 	_sector_index = posmod(sector_idx, SECTOR_PALETTES.size())
 	var pal: Dictionary = SECTOR_PALETTES[_sector_index]

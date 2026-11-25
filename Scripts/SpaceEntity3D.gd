@@ -115,6 +115,35 @@ static func clear_static_caches() -> void:
 	_enemy_wing_mesh = null
 
 
+static func warm_up_assets() -> void:
+	_ensure_shared_assets()
+
+
+static func build_shader_warmup_cluster() -> Node3D:
+	_ensure_shared_assets()
+	var root := Node3D.new()
+	var mats: Array[Material] = [
+		_mat_rock_brown,
+		_mat_rock_slate,
+		_mat_rock_crystal,
+		_mat_rock_bomb_green,
+		_mat_rock_bomb_gold,
+		_mat_black_hole_disk,
+		_mat_quantum_crystal,
+		_mat_quantum_crystal_halo,
+		_mat_enemy_hull,
+		_mat_boss_core
+	]
+	for i: int in range(mats.size()):
+		var mi := MeshInstance3D.new()
+		mi.mesh = _bh_disk_mesh if mats[i] == _mat_black_hole_disk else _rock_meshes[0]
+		mi.material_override = mats[i]
+		mi.scale = Vector3.ONE * 0.05
+		mi.position = Vector3(float(i - 5) * 0.15, 0.0, 0.0)
+		root.add_child(mi)
+	return root
+
+
 static func _ensure_shared_assets() -> void:
 	if not _rock_meshes.is_empty():
 		return
