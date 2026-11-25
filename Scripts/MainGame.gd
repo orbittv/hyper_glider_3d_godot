@@ -58,6 +58,12 @@ var _exit_confirm_msec: int = 0
 var _last_tap_pos: Vector2 = Vector2.ZERO
 var _combo: int = 1
 var _combo_timer: float = 0.0
+var _stat_destroyed: int = 0
+var _stat_grazes: int = 0
+var _max_combo_reached: int = 1
+var _boost_fov_kick: float = 0.0
+var _bar_boss_trail: ProgressBar
+var _boss_bar_trail_val: float = 100.0
 
 var _base_forward_speed: float = 42.0
 var _hyper_charge: float = 0.0 # 0.0 .. 100.0
@@ -679,6 +685,8 @@ func _update_camera_3d(delta: float, is_hyper: bool, is_tunnel: bool) -> void:
 		target_fov += 18.0
 	elif is_hyper:
 		target_fov += 11.0
+	_boost_fov_kick = move_toward(_boost_fov_kick, 0.0, delta * 14.0)
+	target_fov += _boost_fov_kick
 
 	# Адаптируем вертикальный FOV под вытянутые экраны смартфонов (20:9, _view_h > 960), чтобы ширина 3D-коридора всегда совпадала с экраном
 	var aspect_scale: float = clampf(_view_h / 960.0, 1.0, 1.45)
@@ -1041,7 +1049,9 @@ func _on_meteor_destroyed(ent: SpaceEntity3D) -> void:
 	var is_bomb: bool = ent.is_plasma_bomb()
 	var is_crystal: bool = ent.kind == SpaceEntity3D.Kind.METEOR_CRYSTAL
 	var is_boss: bool = ent.kind == SpaceEntity3D.Kind.ENEMY_BOSS_3D
-	var is_interceptor: bool = ent.kind == SpaceEntity3D.Kind.ENEMY_INTERCEPTOR
+	var is_sniper: bool = ent.kind == SpaceEntity3D.Kind.ENEMY_SNIPER_3D
+	var is_interceptor: bool = ent.kind == SpaceEntity3D.Kind.ENEMY_INTERCEPTOR or is_sniper
+	_stat_destroyed += 1
 
 	var pts: int = ent.score_value * _combo
 	_score += pts
@@ -1063,7 +1073,8 @@ func _on_meteor_destroyed(ent: SpaceEntity3D) -> void:
 
 	if is_boss:
 		_audio.play_boss_explode()
-		_spawn_crystal_burst(pos, 6 + mini(_wave / 3, 6))
+		_spawn_crystal_burst(pos, 3, 3)
+		_spawn_crystal_burst(pos, 4 + mini(_wave / 3, 4), 1)
 		_cam_shake = 1.1
 		_trigger_screen_flash(Color(1.0, 0.32, 0.55), 0.48)
 		_show_banner(ent.boss_title + " УНИЧТОЖЕН! ОТКРЫТА 3D ЧЁРНАЯ ДЫРА!", Color(1.0, 0.88, 0.30), 3.4)
@@ -1090,11 +1101,15 @@ func _on_meteor_destroyed(ent: SpaceEntity3D) -> void:
 	else:
 		_audio.play_asteroid_explode()
 		_cam_shake = maxf(_cam_shake, 0.22)
-		if is_interceptor:
+		if is_sniper:
+			_spawn_floating_3d_text(pos, "+%d СНАЙПЕР!" % pts, exp_col)
+		elif is_interceptor:
 			_spawn_floating_3d_text(pos, "+%d ПЕРЕХВАТЧИК!" % pts, exp_col)
 
 	# Квантовые Кристаллы: щедро из бомб и катеров, редко из кристаллических метеоритов
-	if is_interceptor and randf() < 0.55:
+	if is_sniper or ent.kind == SpaceEntity3D.Kind.METEOR_PLASMA_GOLD:
+		_spawn_crystal_burst(pos, 1, 3)
+	elif is_interceptor and randf() < 0.55:
 		_spawn_crystal_burst(pos, 1 + (1 if randf() < 0.3 else 0))
 	elif is_bomb and randf() < 0.45:
 		_spawn_crystal_burst(pos, 1)
@@ -1111,7 +1126,7 @@ func _on_meteor_destroyed(ent: SpaceEntity3D) -> void:
 		drop.setup_entity(drop_kind, pos, _base_forward_speed * 0.75, 1.15, _wave)
 
 
-func _spawn_crystal_burst(pos: Vector3, count: int) -> void:
+func _spawn_crystal_burst(pos: Vector3, count: int, tier_val: int = 1) -> void:
 	for i: int in range(count):
 		var cr := SpaceEntity3D.new()
 		_entities_root.add_child(cr)
@@ -1122,6 +1137,7 @@ func _spawn_crystal_burst(pos: Vector3, count: int) -> void:
 			1.0,
 			_wave
 		)
+		cr.set_crystal_tier(tier_val)
 		cr.velocity.x = randf_range(-5.0, 5.0)
 		cr.velocity.y = randf_range(-3.0, 4.0)
 
@@ -1156,6 +1172,23 @@ func _update_entities_3d(delta: float, speed_mult: float, is_invulnerable_warp: 
 				_enter_hyper_tunnel(bh_pos)
 			continue
 
+		# 1b. Кольцо ускорения
+		if ent.kind == SpaceEntity3D.Kind.BOOST_RING_3D:
+			if absf(ent.position.z - g_pos.z) < 2.2 and Vector2(ent.position.x - g_pos.x, ent.position.y - g_pos.y).length() <= ent.radius + 0.85:
+				_combo = mini(_combo + 1, 8)
+				_max_combo_reached = maxi(_max_combo_reached, _combo)
+				_combo_timer = 4.5
+				var ring_pts: int = 180 * _combo
+				_score += ring_pts
+				_award_crystals(1, false)
+				_add_hyper_charge(12.0)
+				_boost_fov_kick = 6.5
+				_audio.play_weapon_pickup()
+				_fx3d.spawn_engine_wake_ring(ent.global_position, Color(0.28, 1.0, 0.78))
+				_spawn_floating_3d_text(ent.global_position, "УСКОРЕНИЕ +%d • +1 КР!" % ring_pts, Color(0.32, 1.0, 0.78))
+				ent.queue_free()
+			continue
+
 		# 2. Подбор энергетических сфер и капсул вооружения
 		if ent.is_pickup_orb():
 			if dist <= ent.radius + glider_hit_r + 0.55:
@@ -1183,6 +1216,8 @@ func _update_entities_3d(delta: float, speed_mult: float, is_invulnerable_warp: 
 func _trigger_graze_bonus(threat_pos: Vector3) -> void:
 	var g_pos: Vector3 = _glider.global_position
 	_combo = mini(_combo + 1, 8)
+	_max_combo_reached = maxi(_max_combo_reached, _combo)
+	_stat_grazes += 1
 	_combo_timer = 4.5
 	var graze_pts: int = 45 * _combo
 	_score += graze_pts
@@ -1222,6 +1257,14 @@ func _fire_enemy_weapons_3d(ent: SpaceEntity3D) -> void:
 	_audio.play_enemy_fire()
 	if ent.kind == SpaceEntity3D.Kind.ENEMY_INTERCEPTOR:
 		_spawn_projectile(WeaponProjectile3D.Kind.ENEMY_PLASMA_BOLT, start_pos, to_player * 56.0)
+	elif ent.kind == SpaceEntity3D.Kind.ENEMY_SNIPER_3D:
+		var aim_pt: Vector3 = ent.sniper_aim_pos if ent.sniper_aim_pos != Vector3.ZERO else g_pos
+		var aim_dir: Vector3 = (aim_pt - start_pos).normalized()
+		if aim_dir.z < 0.35:
+			aim_dir.z = 0.35
+			aim_dir = aim_dir.normalized()
+		_spawn_projectile(WeaponProjectile3D.Kind.ENEMY_PLASMA_BOLT, start_pos, aim_dir * 78.0)
+		ent.sniper_aim_pos = Vector3.ZERO
 	elif ent.kind == SpaceEntity3D.Kind.ENEMY_BOSS_3D:
 		ent.attack_counter += 1
 		var fan_count: int = 5 if ent.boss_enraged else 3
@@ -1550,6 +1593,11 @@ func _start_new_run() -> void:
 	_active_boss = null
 	_combo = 1
 	_combo_timer = 0.0
+	_stat_destroyed = 0
+	_stat_grazes = 0
+	_max_combo_reached = 1
+	_boost_fov_kick = 0.0
+	_boss_bar_trail_val = 100.0
 	_hyper_charge = 0.0
 	_hyper_timer = 0.0
 	_tunnel_timer = 0.0
@@ -1617,7 +1665,8 @@ func _trigger_game_over() -> void:
 		"РЕЖИМ: %s\n" % mode_title
 		+ "СЧЁТ: %d%s\n" % [_score, rec_tag]
 		+ "ДОСТИГНУТА ВОЛНА: %d\n" % _wave
-		+ "ЛУЧШИЙ РЕКОРД: %d\n\n" % _config.get_high_score(_is_assault_mode)
+		+ "ЛУЧШИЙ РЕКОРД: %d\n" % _config.get_high_score(_is_assault_mode)
+		+ "УНИЧТОЖЕНО: %d • НА ГРАНИ: %d • МАКС. КОМБО: x%d\n\n" % [_stat_destroyed, _stat_grazes, _max_combo_reached]
 		+ "СОБРАНО КВАНТОВЫХ КРИСТАЛЛОВ: +%d" % earned_credits
 	)
 	_gameover_overlay.visible = true
@@ -2003,16 +2052,31 @@ func _build_hud_ui() -> void:
 	_lbl_boss_title = UiBuilder.create_label("КРЕЙСЕР «ТИТАН-3D»", 12, Color(1.0, 0.58, 0.72), HORIZONTAL_ALIGNMENT_CENTER)
 	boss_vbox.add_child(_lbl_boss_title)
 
-	_bar_boss_hp = UiBuilder.create_neon_progress_bar(
+	var boss_bar_stack := Control.new()
+	boss_bar_stack.custom_minimum_size = Vector2(0.0, 10.0)
+	boss_vbox.add_child(boss_bar_stack)
+	_bar_boss_trail = UiBuilder.create_neon_progress_bar(
 		10.0,
 		Color(0.06, 0.01, 0.03, 0.95),
+		Color(0.0, 0.0, 0.0, 0.0),
+		Color(1.0, 0.88, 0.36, 0.92),
+		5,
+		0
+	)
+	_bar_boss_trail.value = 100.0
+	_bar_boss_trail.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	boss_bar_stack.add_child(_bar_boss_trail)
+	_bar_boss_hp = UiBuilder.create_neon_progress_bar(
+		10.0,
+		Color(0.0, 0.0, 0.0, 0.0),
 		Color(0.0, 0.0, 0.0, 0.0),
 		Color(1.0, 0.24, 0.46, 0.98),
 		5,
 		0
 	)
 	_bar_boss_hp.value = 100.0
-	boss_vbox.add_child(_bar_boss_hp)
+	_bar_boss_hp.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	boss_bar_stack.add_child(_bar_boss_hp)
 
 
 func _reset_hud_cache() -> void:
@@ -2085,6 +2149,11 @@ func _update_hud_ui() -> void:
 		if has_b:
 			var pct: float = clampf((_active_boss.hp / maxf(1.0, _active_boss.max_hp)) * 100.0, 0.0, 100.0)
 			_bar_boss_hp.value = pct
+			if pct > _boss_bar_trail_val:
+				_boss_bar_trail_val = pct
+			else:
+				_boss_bar_trail_val = move_toward(_boss_bar_trail_val, pct, get_process_delta_time() * 26.0)
+			_bar_boss_trail.value = _boss_bar_trail_val
 			var pct_int: int = int(ceil(pct))
 			var rage_int: int = 1 if _active_boss.boss_enraged else 0
 			if pct_int != _hud_c_boss_pct or rage_int != _hud_c_boss_rage:
@@ -2323,7 +2392,7 @@ func _build_gameover_overlay() -> void:
 		Color(1.0, 0.36, 0.54, 0.90)
 	)
 	_gameover_overlay = modal["root"]
-	_modal_cards.append({"card": modal["card"], "margin_x": 26.0, "card_h": 500.0})
+	_modal_cards.append({"card": modal["card"], "margin_x": 26.0, "card_h": 545.0})
 	var vbox: VBoxContainer = modal["vbox"]
 
 	vbox.add_child(UiBuilder.create_label("ГЛАЙДЕР ПОДБИТ", 26, Color(1.0, 0.42, 0.56), HORIZONTAL_ALIGNMENT_CENTER, 3))

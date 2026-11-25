@@ -16,6 +16,7 @@ var _pattern_timer: float = 5.5
 var _black_hole_timer: float = 22.0
 var _tunnel_ribbon_timer: float = 0.22
 var _tunnel_angle: float = 0.0
+var _tunnel_ring_step: int = 0
 
 
 func reset_director() -> void:
@@ -25,6 +26,7 @@ func reset_director() -> void:
 	_black_hole_timer = 21.0
 	_tunnel_ribbon_timer = 0.15
 	_tunnel_angle = 0.0
+	_tunnel_ring_step = 0
 
 
 func update_spawning(
@@ -99,8 +101,12 @@ func _spawn_random_meteor(entities_root: Node3D, wave_num: int, forward_speed: f
 		kind = SpaceEntity3D.Kind.METEOR_CRYSTAL
 		rad = randf_range(1.35, 1.95)
 	elif roll < 0.48:
-		kind = SpaceEntity3D.Kind.ENEMY_INTERCEPTOR
-		rad = 1.65
+		if wave_num >= 2 and randf() < 0.34:
+			kind = SpaceEntity3D.Kind.ENEMY_SNIPER_3D
+			rad = 1.75
+		else:
+			kind = SpaceEntity3D.Kind.ENEMY_INTERCEPTOR
+			rad = 1.65
 	elif roll > 0.88:
 		# Гигантский валун
 		rad = randf_range(2.55, 3.35)
@@ -127,7 +133,11 @@ func _spawn_meteor_ring_gate(entities_root: Node3D, wave_num: int, forward_speed
 		entities_root.add_child(ent)
 		ent.setup_entity(SpaceEntity3D.Kind.METEOR_ROCK, pos, forward_speed, 1.25, wave_num)
 
-	# В центре кольца — ценная сфера оружия или Гипер-Ядра!
+	# В центре кольца — Кольцо Ускорения и ценная сфера оружия / Гипер-Ядра!
+	var boost_gate := SpaceEntity3D.new()
+	entities_root.add_child(boost_gate)
+	boost_gate.setup_entity(SpaceEntity3D.Kind.BOOST_RING_3D, Vector3(center_x, center_y, SPAWN_Z + 1.5), forward_speed, 3.15, wave_num)
+
 	var center_orb := SpaceEntity3D.new()
 	entities_root.add_child(center_orb)
 	var orb_kind: SpaceEntity3D.Kind = _pick_weapon_or_hyper_kind()
@@ -234,12 +244,13 @@ func _spawn_black_hole_portal(entities_root: Node3D, forward_speed: float) -> vo
 
 
 func _update_tunnel_spawns(delta: float, entities_root: Node3D, forward_speed: float) -> void:
-	# Внутри 3D Гипер-туннеля спавним спиральные ленты энергетических сфер и оружия!
+	# Внутри 3D Гипер-туннеля спавним спиральные ленты сфер, кристаллов и Кольца Гипер-Ускорения!
 	_tunnel_ribbon_timer -= delta
 	if _tunnel_ribbon_timer > 0.0:
 		return
 	_tunnel_ribbon_timer = 0.16
 	_tunnel_angle += 0.52
+	_tunnel_ring_step += 1
 
 	var rad: float = 3.8
 	var pos := Vector3(
@@ -247,6 +258,11 @@ func _update_tunnel_spawns(delta: float, entities_root: Node3D, forward_speed: f
 		sin(_tunnel_angle) * rad * 0.78 + 0.5,
 		TUNNEL_SPAWN_Z
 	)
+
+	if _tunnel_ring_step % 11 == 0:
+		var gate := SpaceEntity3D.new()
+		entities_root.add_child(gate)
+		gate.setup_entity(SpaceEntity3D.Kind.BOOST_RING_3D, pos, forward_speed * 1.25, 3.15, 1)
 
 	var kind: SpaceEntity3D.Kind = SpaceEntity3D.Kind.ORB_ENERGY
 	var r: float = randf()

@@ -19,8 +19,10 @@ enum Kind {
 	ORB_WEAPON_LASER,
 	ORB_WEAPON_MISSILE,
 	ORB_QUANTUM_CRYSTAL,
+	BOOST_RING_3D,
 	BLACK_HOLE_PORTAL,
 	ENEMY_INTERCEPTOR,
+	ENEMY_SNIPER_3D,
 	ENEMY_BOSS_3D
 }
 
@@ -41,11 +43,13 @@ var fire_cooldown: float = 1.4
 var fire_interval: float = 1.6
 var spawn_origin_xy: Vector2 = Vector2.ZERO
 var attack_counter: int = 0
+var sniper_aim_pos: Vector3 = Vector3.ZERO
 
 var _visual_root: Node3D
 var _rock_mesh_inst: MeshInstance3D
 var _plasma_core_inst: MeshInstance3D
 var _ring_inst: MeshInstance3D
+var _sniper_sight_inst: MeshInstance3D
 var _hit_flash_timer: float = 0.0
 var _base_rock_mat: Material
 
@@ -66,10 +70,16 @@ static var _mat_enemy_neon: StandardMaterial3D
 static var _mat_boss_core: StandardMaterial3D
 static var _mat_quantum_crystal: StandardMaterial3D
 static var _mat_quantum_crystal_halo: StandardMaterial3D
+static var _mat_gold_crystal: StandardMaterial3D
+static var _mat_sniper_hull: StandardMaterial3D
+static var _mat_sniper_sight: StandardMaterial3D
+static var _mat_boost_ring: StandardMaterial3D
 static var _orb_materials: Dictionary = {}
 
 static var _orb_sphere_mesh: SphereMesh
 static var _orb_ring_mesh: TorusMesh
+static var _boost_torus_mesh: TorusMesh
+static var _sniper_sight_mesh: CylinderMesh
 static var _crystal_octa_mesh: ArrayMesh
 static var _bh_void_mesh: SphereMesh
 static var _bh_disk_mesh: QuadMesh
@@ -106,8 +116,14 @@ static func clear_static_caches() -> void:
 	_mat_boss_core = null
 	_mat_quantum_crystal = null
 	_mat_quantum_crystal_halo = null
+	_mat_gold_crystal = null
+	_mat_sniper_hull = null
+	_mat_sniper_sight = null
+	_mat_boost_ring = null
 	_orb_sphere_mesh = null
 	_orb_ring_mesh = null
+	_boost_torus_mesh = null
+	_sniper_sight_mesh = null
 	_crystal_octa_mesh = null
 	_bh_void_mesh = null
 	_bh_disk_mesh = null
@@ -287,6 +303,43 @@ static func _ensure_shared_assets() -> void:
 	_mat_quantum_crystal_halo.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	_mat_quantum_crystal_halo.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
 	_mat_quantum_crystal_halo.albedo_color = Color(0.55, 0.42, 1.0, 0.82)
+
+	_mat_gold_crystal = StandardMaterial3D.new()
+	_mat_gold_crystal.albedo_color = Color(1.0, 0.84, 0.22, 0.98)
+	_mat_gold_crystal.metallic = 0.85
+	_mat_gold_crystal.roughness = 0.12
+	_mat_gold_crystal.emission_enabled = true
+	_mat_gold_crystal.emission = Color(1.0, 0.72, 0.16)
+	_mat_gold_crystal.emission_energy_multiplier = 2.05
+
+	_mat_sniper_hull = StandardMaterial3D.new()
+	_mat_sniper_hull.albedo_color = Color(0.16, 0.06, 0.26)
+	_mat_sniper_hull.metallic = 0.86
+	_mat_sniper_hull.roughness = 0.20
+
+	_mat_sniper_sight = StandardMaterial3D.new()
+	_mat_sniper_sight.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_mat_sniper_sight.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_mat_sniper_sight.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	_mat_sniper_sight.albedo_color = Color(1.0, 0.16, 0.45, 0.62)
+
+	_mat_boost_ring = StandardMaterial3D.new()
+	_mat_boost_ring.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_mat_boost_ring.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_mat_boost_ring.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	_mat_boost_ring.albedo_color = Color(0.24, 1.0, 0.78, 0.82)
+
+	_boost_torus_mesh = TorusMesh.new()
+	_boost_torus_mesh.inner_radius = 2.85
+	_boost_torus_mesh.outer_radius = 3.18
+	_boost_torus_mesh.rings = 28
+	_boost_torus_mesh.ring_segments = 10
+
+	_sniper_sight_mesh = CylinderMesh.new()
+	_sniper_sight_mesh.top_radius = 0.045
+	_sniper_sight_mesh.bottom_radius = 0.045
+	_sniper_sight_mesh.height = 1.0
+	_sniper_sight_mesh.radial_segments = 6
 
 	var orb_colors: Dictionary = {
 		Kind.ORB_ENERGY: Color(0.20, 0.92, 1.0, 0.95),
@@ -480,6 +533,21 @@ func setup_entity(
 			fire_interval = maxf(0.95, 1.75 - float(wave_num) * 0.06)
 			fire_cooldown = randf_range(0.55, 1.15)
 			_build_interceptor_visual()
+		Kind.ENEMY_SNIPER_3D:
+			radius = 1.75
+			max_hp = 68.0 * hp_wave_mult
+			hp = max_hp
+			score_value = 280
+			spawn_origin_xy = Vector2(start_pos.x, start_pos.y)
+			velocity = Vector3(0.0, 0.0, forward_vel_z * 0.84)
+			fire_interval = maxf(1.55, 2.25 - float(wave_num) * 0.05)
+			fire_cooldown = 1.35
+			_build_sniper_visual()
+		Kind.BOOST_RING_3D:
+			radius = 3.15
+			velocity = Vector3(0.0, 0.0, forward_vel_z * 0.96)
+			score_value = 180
+			_build_boost_ring_visual()
 		Kind.ENEMY_BOSS_3D:
 			radius = 3.85
 			max_hp = (460.0 + float(wave_num) * 110.0)
@@ -562,6 +630,78 @@ func _build_quantum_crystal_visual() -> void:
 	halo.material_override = _mat_quantum_crystal_halo
 	halo.scale = Vector3.ONE * 1.05
 	_visual_root.add_child(halo)
+
+
+func set_crystal_tier(val: int) -> void:
+	crystal_value = maxi(1, val)
+	if kind == Kind.ORB_QUANTUM_CRYSTAL and _plasma_core_inst != null:
+		if crystal_value >= 2:
+			_plasma_core_inst.material_override = _mat_gold_crystal
+			_plasma_core_inst.scale = Vector3.ONE * 1.26
+		else:
+			_plasma_core_inst.material_override = _mat_quantum_crystal
+			_plasma_core_inst.scale = Vector3.ONE * 0.95
+
+
+func _build_boost_ring_visual() -> void:
+	_ring_inst = MeshInstance3D.new()
+	_ring_inst.mesh = _boost_torus_mesh
+	_ring_inst.material_override = _mat_boost_ring
+	_ring_inst.rotation_degrees = Vector3(90.0, 0.0, 0.0)
+	_visual_root.add_child(_ring_inst)
+
+	var inner_ring := MeshInstance3D.new()
+	inner_ring.mesh = _boost_torus_mesh
+	inner_ring.material_override = _mat_gold_crystal
+	inner_ring.rotation_degrees = Vector3(90.0, 0.0, 0.0)
+	inner_ring.scale = Vector3.ONE * 0.88
+	_visual_root.add_child(inner_ring)
+
+
+func _build_sniper_visual() -> void:
+	_base_rock_mat = _mat_sniper_hull
+	_rock_mesh_inst = MeshInstance3D.new()
+	_rock_mesh_inst.mesh = _enemy_body_mesh
+	_rock_mesh_inst.material_override = _mat_sniper_hull
+	_rock_mesh_inst.scale = Vector3(0.88, 0.92, 1.38)
+	_visual_root.add_child(_rock_mesh_inst)
+
+	var swept_l := MeshInstance3D.new()
+	swept_l.mesh = _enemy_wing_mesh
+	swept_l.material_override = _mat_sniper_hull
+	swept_l.scale = Vector3(0.62, 1.0, 1.15)
+	swept_l.position = Vector3(-0.95, 0.0, -0.1)
+	swept_l.rotation_degrees = Vector3(0.0, -28.0, 18.0)
+	_visual_root.add_child(swept_l)
+
+	var swept_r := MeshInstance3D.new()
+	swept_r.mesh = _enemy_wing_mesh
+	swept_r.material_override = _mat_sniper_hull
+	swept_r.scale = Vector3(0.62, 1.0, 1.15)
+	swept_r.position = Vector3(0.95, 0.0, -0.1)
+	swept_r.rotation_degrees = Vector3(0.0, 28.0, -18.0)
+	_visual_root.add_child(swept_r)
+
+	var fin_neon := MeshInstance3D.new()
+	fin_neon.mesh = _orb_ring_mesh
+	fin_neon.material_override = _mat_enemy_neon
+	fin_neon.rotation_degrees = Vector3(90.0, 0.0, 0.0)
+	fin_neon.scale = Vector3.ONE * 1.45
+	_visual_root.add_child(fin_neon)
+
+	_plasma_core_inst = MeshInstance3D.new()
+	_plasma_core_inst.mesh = _orb_sphere_mesh
+	_plasma_core_inst.material_override = _mat_boss_core
+	_plasma_core_inst.scale = Vector3.ONE * 0.95
+	_plasma_core_inst.position = Vector3(0.0, 0.08, 0.55)
+	_visual_root.add_child(_plasma_core_inst)
+
+	# Луч лазерного целеуказателя Снайпера (ориентируется в мировых координатах на глайдера)
+	_sniper_sight_inst = MeshInstance3D.new()
+	_sniper_sight_inst.mesh = _sniper_sight_mesh
+	_sniper_sight_inst.material_override = _mat_sniper_sight
+	_sniper_sight_inst.visible = false
+	add_child(_sniper_sight_inst)
 
 
 func _build_black_hole_visual() -> void:
@@ -651,7 +791,7 @@ func is_meteor() -> bool:
 
 
 func is_enemy_ship() -> bool:
-	return kind == Kind.ENEMY_INTERCEPTOR or kind == Kind.ENEMY_BOSS_3D
+	return kind == Kind.ENEMY_INTERCEPTOR or kind == Kind.ENEMY_SNIPER_3D or kind == Kind.ENEMY_BOSS_3D
 
 
 func is_hostile() -> bool:
@@ -718,6 +858,13 @@ func update_entity(delta: float, speed_mult: float, glider_pos: Vector3, magnet_
 			_ring_inst.rotation.z -= delta * 1.8
 		return position.z < 18.0
 
+	# Кольцо Гипер-Ускорения (вращается навстречу игроку)
+	if kind == Kind.BOOST_RING_3D:
+		position.z += velocity.z * speed_mult * delta
+		if _visual_root != null:
+			_visual_root.rotation.z += delta * 2.2
+		return position.z < 16.0
+
 	# Поведение тяжёлого 3D Босса-Дредноута (выходит на боевую дистанцию z = -34 и маневрирует по восьмёрке)
 	if kind == Kind.ENEMY_BOSS_3D:
 		if position.z < -34.0:
@@ -728,9 +875,32 @@ func update_entity(delta: float, speed_mult: float, glider_pos: Vector3, magnet_
 		if _ring_inst != null:
 			_ring_inst.rotation.z += delta * (3.8 if boss_enraged else 1.9)
 			_ring_inst.rotation.x = sin(age * 2.0) * 0.55
+		if _plasma_core_inst != null:
+			var tele: float = 3.55 if fire_cooldown < 0.35 else 2.8
+			_plasma_core_inst.scale = Vector3.ONE * tele
 		if _visual_root != null:
 			_visual_root.rotation.z = -cos(age * spd) * 0.18
 		return true
+
+	# Поведение Элитного 3D Снайпера-Фантома (зависает на рубеже z = -44 на 5.5 сек, наводит 3D лазерный прицел и бьёт плазменным копьём)
+	if kind == Kind.ENEMY_SNIPER_3D:
+		if position.z < -44.0 or age > 6.2:
+			position.z += velocity.z * speed_mult * delta
+		position.x = clampf(spawn_origin_xy.x + sin(age * 1.6 + spawn_origin_xy.y) * 2.4, -6.6, 6.6)
+		position.y = clampf(spawn_origin_xy.y + cos(age * 1.3) * 1.2, -3.4, 3.6)
+		if _visual_root != null:
+			_visual_root.rotation.z = -cos(age * 1.6 + spawn_origin_xy.y) * 0.24
+		# Лазерный прицел включается за 0.85с до выстрела и фиксирует точку за 0.22с до залпа (давая окно на уворот или 360°-Бочку!)
+		if _sniper_sight_inst != null:
+			var show_sight: bool = position.z < -12.0 and position.z > -78.0 and fire_cooldown > 0.0 and fire_cooldown <= 0.88
+			_sniper_sight_inst.visible = show_sight
+			if show_sight:
+				if fire_cooldown > 0.22 or sniper_aim_pos == Vector3.ZERO:
+					sniper_aim_pos = sniper_aim_pos.lerp(glider_pos, clampf(delta * 10.0, 0.0, 1.0)) if sniper_aim_pos != Vector3.ZERO else glider_pos
+				var muzzle_w: Vector3 = global_position + Vector3(0.0, 0.05, 1.5)
+				var pulse_w: float = 1.85 if (fire_cooldown < 0.25 and int(age * 36.0) % 2 == 0) else 1.0
+				FxManager3D.orient_cylinder_between(_sniper_sight_inst, muzzle_w, sniper_aim_pos, pulse_w, 0.5)
+		return position.z < 18.0
 
 	# Поведение 3D Катера-Перехватчика (маневрирует по синусоиде навстречу глайдеру)
 	if kind == Kind.ENEMY_INTERCEPTOR:
