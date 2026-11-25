@@ -2127,13 +2127,15 @@ func _update_hud_ui() -> void:
 		_hud_c_graze = _graze_shield_progress
 		_lbl_graze_progress.text = " • ГРАНЬ %d/5" % _graze_shield_progress
 
-	var sec_mode: int = 2 if _tunnel_timer > 0.0 else (1 if _hyper_timer > 0.0 else 0)
+	var sec_mode: int = 2 if _tunnel_timer > 0.0 else (1 if _hyper_timer > 0.0 else (3 if _get_active_special_weapons_count() >= 3 else 0))
 	var sec_tenths: int = int(round((_tunnel_timer if sec_mode == 2 else _hyper_timer) * 10.0))
-	if sec_mode != _hud_c_sector_mode or (sec_mode > 0 and sec_tenths != _hud_c_sector_tenths) or (sec_mode == 0 and _sector_index != _hud_c_sector_idx):
+	if sec_mode != _hud_c_sector_mode or (sec_mode > 0 and sec_tenths != _hud_c_sector_tenths) or (sec_mode == 0 and _sector_index != _hud_c_sector_idx) or (sec_mode == 3 and _hud_c_sector_mode != 3):
 		_hud_c_sector_mode = sec_mode
 		_hud_c_sector_tenths = sec_tenths
 		_hud_c_sector_idx = _sector_index
-		if sec_mode == 2:
+		if sec_mode == 3:
+			_lbl_sector.text = "ОВЕРДРАЙВ АРСЕНАЛА — ОГОНЬ x1.25!"
+		elif sec_mode == 2:
 			_lbl_sector.text = "3D ГИПЕР-ТУННЕЛЬ ЧЁРНОЙ ДЫРЫ: %.1f СЕК" % (float(sec_tenths) * 0.1)
 		elif sec_mode == 1:
 			_lbl_sector.text = "ГИПЕРСКОРОСТЬ АКТИВНА: %.1f СЕК" % (float(sec_tenths) * 0.1)
@@ -2566,10 +2568,18 @@ func _build_settings_overlay() -> void:
 	)
 	_settings_overlay = modal["root"]
 	_modal_cards.append({"card": modal["card"], "margin_x": 22.0, "card_h": 720.0})
-	var vbox: VBoxContainer = modal["vbox"]
+	var card_vbox: VBoxContainer = modal["vbox"]
 
-	vbox.add_child(UiBuilder.create_label("НАСТРОЙКИ 3D И АУДИО", 22, Color(0.38, 0.96, 1.0), HORIZONTAL_ALIGNMENT_CENTER, 3))
+	card_vbox.add_child(UiBuilder.create_label("НАСТРОЙКИ 3D И АУДИО", 22, Color(0.38, 0.96, 1.0), HORIZONTAL_ALIGNMENT_CENTER, 3))
 
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	card_vbox.add_child(scroll)
+	var vbox := VBoxContainer.new()
+	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.add_theme_constant_override("separation", 8)
+	scroll.add_child(vbox)
 	# 1. Громкость музыки
 	var row_mus: Dictionary = UiBuilder.create_slider_row(
 		vbox,
@@ -2692,9 +2702,37 @@ func _build_settings_overlay() -> void:
 	)
 	vbox.add_child(btn_invert_y)
 
+	var btn_swipe := UiBuilder.create_secondary_button(
+		"УПРАВЛЕНИЕ: " + ("СВАЙП" if _config.swipe_control_enabled else "КАСАНИЕ"),
+		44.0,
+		14
+	)
+	btn_swipe.pressed.connect(func() -> void:
+		_audio.play_ui_click()
+		_config.swipe_control_enabled = not _config.swipe_control_enabled
+		btn_swipe.text = "УПРАВЛЕНИЕ: " + ("СВАЙП" if _config.swipe_control_enabled else "КАСАНИЕ")
+		_config.save_data()
+	)
+	vbox.add_child(btn_swipe)
+
+	var btn_vibro := UiBuilder.create_secondary_button(
+		"ВИБРООТКЛИК: " + ("ВКЛ" if _config.vibration_enabled else "ВЫКЛ"),
+		44.0,
+		14
+	)
+	btn_vibro.pressed.connect(func() -> void:
+		_audio.play_ui_click()
+		_config.vibration_enabled = not _config.vibration_enabled
+		btn_vibro.text = "ВИБРООТКЛИК: " + ("ВКЛ" if _config.vibration_enabled else "ВЫКЛ")
+		if _config.vibration_enabled and DisplayServer.get_name() != "headless":
+			Input.vibrate_handheld(40)
+		_config.save_data()
+	)
+	vbox.add_child(btn_vibro)
+
 	var btn_close := UiBuilder.create_primary_button("СОХРАНИТЬ И ЗАКРЫТЬ", 52.0, 18)
 	btn_close.pressed.connect(func() -> void:
 		_audio.play_ui_click()
 		_settings_overlay.visible = false
 	)
-	vbox.add_child(btn_close)
+	card_vbox.add_child(btn_close)
