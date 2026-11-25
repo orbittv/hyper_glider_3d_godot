@@ -1795,10 +1795,12 @@ func _update_boot_loader(delta: float) -> void:
 		_shader_warmup_node = SpaceEntity3D.build_shader_warmup_cluster()
 		_shader_warmup_node.position = Vector3(0.0, 0.5, -10.0)
 		add_child(_shader_warmup_node)
+		_env3d.set_tunnel_warmup(true)
 		_lbl_boot_status.text = "КОМПИЛЯЦИЯ 3D-ШЕЙДЕРОВ... 94%"
 		_bar_boot_load.value = 94.0
 		_boot_step = 4
 	elif _boot_step == 4:
+		_env3d.set_tunnel_warmup(false)
 		if _shader_warmup_node != null and is_instance_valid(_shader_warmup_node):
 			_shader_warmup_node.queue_free()
 			_shader_warmup_node = null
@@ -1820,6 +1822,8 @@ func _finish_boot_loader_immediately() -> void:
 		SpaceEntity3D.warm_up_assets()
 		_warm_up_projectile_pool(32)
 		_fx3d.warm_up_pool(42)
+		if _env3d != null:
+			_env3d.set_tunnel_warmup(false)
 		if _shader_warmup_node != null and is_instance_valid(_shader_warmup_node):
 			_shader_warmup_node.queue_free()
 			_shader_warmup_node = null

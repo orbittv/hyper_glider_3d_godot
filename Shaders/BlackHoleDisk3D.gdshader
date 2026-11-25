@@ -4,6 +4,7 @@ render_mode unshaded, cull_disabled, blend_add, depth_draw_never;
 uniform vec4 inner_color : source_color = vec4(0.35, 0.98, 1.0, 1.0);
 uniform vec4 outer_color : source_color = vec4(0.88, 0.18, 0.96, 1.0);
 uniform float spin_speed : hint_range(0.5, 10.0) = 3.2;
+uniform float opacity : hint_range(0.0, 1.0) = 1.0;
 
 void fragment() {
 	vec2 centered = UV * 2.0 - 1.0;
@@ -32,5 +33,5 @@ void fragment() {
 	float alpha = clamp(disk_mask * (0.42 + bands * 0.55) + photon_ring * 0.88 + outer_corona * inner_edge, 0.0, 1.0);
 
 	ALBEDO = final_col;
-	ALPHA = alpha * smoothstep(1.0, 0.86, r);
+	ALPHA = alpha * smoothstep(1.0, 0.86, r) * opacity;
 }

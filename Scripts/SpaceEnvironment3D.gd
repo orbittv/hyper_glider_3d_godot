@@ -26,6 +26,15 @@ var _hyper_tunnel_mesh_inst: MeshInstance3D
 var _hyper_tunnel_mat: ShaderMaterial
 var _tunnel_rings_root: Node3D
 var _tunnel_ring_nodes: Array[MeshInstance3D] = []
+var _tunnel_ring_mats: Array[StandardMaterial3D] = []
+var _tunnel_ring_base_colors: Array[Color] = []
+
+var _tunnel_singularity_root: Node3D
+var _tunnel_singularity_mesh_inst: MeshInstance3D
+var _tunnel_singularity_mat: ShaderMaterial
+var _tunnel_accretion_disk_inst: MeshInstance3D
+var _tunnel_accretion_mat: ShaderMaterial
+var _tunnel_void_sphere_inst: MeshInstance3D
 
 var _planets_root: Node3D
 var _giant_planet: Node3D
@@ -36,8 +45,10 @@ var _moon_planet_mat: ShaderMaterial
 
 var _current_brightness: float = 0.85
 var _tunnel_blend: float = 0.0
+var _singularity_blend: float = 0.0
 var _hyper_blend: float = 0.0
 var _sector_index: int = 0
+var _warmup_active: bool = false
 
 # Цветовые темы секторов глубокого космоса
 const SECTOR_PALETTES: Array[Dictionary] = [
@@ -74,6 +85,7 @@ func _ready() -> void:
 	_setup_3d_starfield()
 	_setup_distant_planets()
 	_setup_hyper_tunnel()
+	set_sector_palette(0)
 
 
 func _setup_world_environment() -> void:
@@ -226,15 +238,17 @@ func _setup_hyper_tunnel() -> void:
 	cyl.top_radius = 15.5
 	cyl.bottom_radius = 15.5
 	cyl.height = 210.0
-	cyl.radial_segments = 36
-	cyl.rings = 16
+	cyl.radial_segments = 48
+	cyl.rings = 32
 	cyl.cap_top = false
 	cyl.cap_bottom = false
 
 	_hyper_tunnel_mat = ShaderMaterial.new()
 	var tunnel_shader := load("res://Shaders/HyperTunnel3D.gdshader") as Shader
 	_hyper_tunnel_mat.shader = tunnel_shader
+	_hyper_tunnel_mat.render_priority = -2
 	_hyper_tunnel_mat.set_shader_parameter("tunnel_intensity", 0.0)
+	_hyper_tunnel_mat.set_shader_parameter("tunnel_half_length", 105.0)
 	cyl.material = _hyper_tunnel_mat
 
 	_hyper_tunnel_mesh_inst.mesh = cyl
@@ -243,6 +257,54 @@ func _setup_hyper_tunnel() -> void:
 	_hyper_tunnel_mesh_inst.position = Vector3(0.0, 0.0, -82.0)
 	_hyper_tunnel_mesh_inst.visible = false
 	add_child(_hyper_tunnel_mesh_inst)
+
+	# Глубинная сингулярность в конце 3D Гипер-туннеля: бездонная темнота внутри + гравитационное искривление пространства
+	_tunnel_singularity_root = Node3D.new()
+	_tunnel_singularity_root.position = Vector3(0.0, 0.0, -172.0)
+	_tunnel_singularity_root.visible = false
+	add_child(_tunnel_singularity_root)
+
+	_tunnel_singularity_mesh_inst = MeshInstance3D.new()
+	var sing_quad := QuadMesh.new()
+	sing_quad.size = Vector2(76.0, 76.0)
+	_tunnel_singularity_mat = ShaderMaterial.new()
+	_tunnel_singularity_mat.shader = load("res://Shaders/TunnelSingularity3D.gdshader") as Shader
+	_tunnel_singularity_mat.render_priority = -4
+	_tunnel_singularity_mat.set_shader_parameter("intensity", 0.0)
+	_tunnel_singularity_mat.set_shader_parameter("quad_half_size", 38.0)
+	_tunnel_singularity_mesh_inst.mesh = sing_quad
+	_tunnel_singularity_mesh_inst.material_override = _tunnel_singularity_mat
+	_tunnel_singularity_root.add_child(_tunnel_singularity_mesh_inst)
+
+	# Внутренняя абсолютно чёрная 3D-сфера горизонта событий (спрятана внутри мягкой темноты шейдера,
+	# но физически перекрывает заднюю дугу наклонённого аккреционного диска, как у настоящей Чёрной дыры!)
+	_tunnel_void_sphere_inst = MeshInstance3D.new()
+	var void_sp := SphereMesh.new()
+	void_sp.radius = 9.0
+	void_sp.height = 18.0
+	void_sp.radial_segments = 24
+	void_sp.rings = 12
+	var void_mat := StandardMaterial3D.new()
+	void_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	void_mat.albedo_color = Color(0.0, 0.0, 0.0, 1.0)
+	_tunnel_void_sphere_inst.mesh = void_sp
+	_tunnel_void_sphere_inst.material_override = void_mat
+	_tunnel_void_sphere_inst.visible = false
+	_tunnel_singularity_root.add_child(_tunnel_void_sphere_inst)
+
+	# Деликатный наклонённый 3D-аккреционный диск вокруг далёкой сингулярности (перекликается с входной Чёрной дырой)
+	_tunnel_accretion_disk_inst = MeshInstance3D.new()
+	var acc_quad := QuadMesh.new()
+	acc_quad.size = Vector2(76.0, 76.0)
+	_tunnel_accretion_mat = ShaderMaterial.new()
+	_tunnel_accretion_mat.shader = load("res://Shaders/BlackHoleDisk3D.gdshader") as Shader
+	_tunnel_accretion_mat.render_priority = -3
+	_tunnel_accretion_mat.set_shader_parameter("spin_speed", 2.0)
+	_tunnel_accretion_mat.set_shader_parameter("opacity", 0.0)
+	_tunnel_accretion_disk_inst.mesh = acc_quad
+	_tunnel_accretion_disk_inst.material_override = _tunnel_accretion_mat
+	_tunnel_accretion_disk_inst.rotation_degrees = Vector3(76.0, 11.0, -8.0)
+	_tunnel_singularity_root.add_child(_tunnel_accretion_disk_inst)
 
 	# 5 очень тонких и мягких ориентирных колец внутри Гипер-туннеля (без нагрузки на глаза)
 	_tunnel_rings_root = Node3D.new()
@@ -262,13 +324,18 @@ func _setup_hyper_tunnel() -> void:
 		r_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		r_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		r_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		r_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+		r_mat.render_priority = -1
 		var hue: float = fmod(0.52 + float(i) * 0.08, 1.0)
-		r_mat.albedo_color = Color.from_hsv(hue, 0.65, 0.85, 0.16)
+		var base_col := Color.from_hsv(hue, 0.65, 0.85, 0.16)
+		r_mat.albedo_color = base_col
 		ring_inst.material_override = r_mat
 		ring_inst.rotation_degrees = Vector3(90.0, 0.0, 0.0)
 		ring_inst.position = Vector3(0.0, 0.0, -24.0 - float(i) * 34.0)
 		_tunnel_rings_root.add_child(ring_inst)
 		_tunnel_ring_nodes.append(ring_inst)
+		_tunnel_ring_mats.append(r_mat)
+		_tunnel_ring_base_colors.append(base_col)
 
 
 func _setup_distant_planets() -> void:
@@ -369,6 +436,33 @@ func set_sector_palette(sector_idx: int) -> void:
 		_moon_planet_mat.set_shader_parameter("band_color_a", Color(pal["neb_b"]).lightened(0.20))
 		_moon_planet_mat.set_shader_parameter("band_color_b", Color(pal["neb_a"]).darkened(0.15))
 		_moon_planet_mat.set_shader_parameter("atmo_color", Color(pal["core"]).lightened(0.15))
+	if _hyper_tunnel_mat != null:
+		_hyper_tunnel_mat.set_shader_parameter("primary_color", Color(pal["core"]).darkened(0.18))
+		_hyper_tunnel_mat.set_shader_parameter("secondary_color", Color(pal["neb_b"]).lightened(0.22))
+	if _tunnel_singularity_mat != null:
+		_tunnel_singularity_mat.set_shader_parameter("rim_color_a", Color(pal["core"]))
+		_tunnel_singularity_mat.set_shader_parameter("rim_color_b", Color(pal["neb_b"]).lightened(0.32))
+	if _tunnel_accretion_mat != null:
+		_tunnel_accretion_mat.set_shader_parameter("inner_color", Color(pal["core"]))
+		_tunnel_accretion_mat.set_shader_parameter("outer_color", Color(pal["neb_b"]).lightened(0.38))
+
+
+func set_tunnel_warmup(active: bool) -> void:
+	_warmup_active = active
+	if active:
+		if _hyper_tunnel_mesh_inst != null and _hyper_tunnel_mat != null:
+			_hyper_tunnel_mesh_inst.visible = true
+			_hyper_tunnel_mat.set_shader_parameter("tunnel_intensity", 0.02)
+		if _tunnel_singularity_root != null and _tunnel_singularity_mat != null:
+			_tunnel_singularity_root.visible = true
+			_tunnel_singularity_mat.set_shader_parameter("intensity", 0.02)
+			if _tunnel_accretion_mat != null:
+				_tunnel_accretion_mat.set_shader_parameter("opacity", 0.02)
+	else:
+		if _hyper_tunnel_mesh_inst != null and _tunnel_blend <= 0.01:
+			_hyper_tunnel_mesh_inst.visible = false
+		if _tunnel_singularity_root != null and _singularity_blend <= 0.01:
+			_tunnel_singularity_root.visible = false
 
 
 func get_current_sector_name() -> String:
@@ -380,17 +474,35 @@ func update_environment(delta: float, forward_speed: float, is_hyper: bool, is_t
 	var target_tunnel: float = 1.0 if is_tunnel else (0.35 if is_hyper else 0.0)
 	_tunnel_blend = move_toward(_tunnel_blend, target_tunnel, delta * 2.2)
 
+	var target_singularity: float = 1.0 if is_tunnel else 0.0
+	_singularity_blend = move_toward(_singularity_blend, target_singularity, delta * 2.0)
+
 	var target_hyper: float = 1.0 if (is_hyper or is_tunnel) else 0.0
 	_hyper_blend = move_toward(_hyper_blend, target_hyper, delta * 2.5)
 
 	if _sky_mat != null:
 		_sky_mat.set_shader_parameter("warp_factor", _hyper_blend)
+		_sky_mat.set_shader_parameter("tunnel_factor", _singularity_blend)
 
-	if _hyper_tunnel_mesh_inst != null and _hyper_tunnel_mat != null:
+	if _hyper_tunnel_mesh_inst != null and _hyper_tunnel_mat != null and not _warmup_active:
 		_hyper_tunnel_mesh_inst.visible = _tunnel_blend > 0.01
 		_hyper_tunnel_mat.set_shader_parameter("tunnel_intensity", _tunnel_blend)
 		_hyper_tunnel_mat.set_shader_parameter("rainbow_mode", 0.65 if is_tunnel else 0.25)
 		_hyper_tunnel_mat.set_shader_parameter("scroll_speed", 2.4 if is_tunnel else 1.8)
+
+	if _tunnel_singularity_root != null and _tunnel_singularity_mat != null and not _warmup_active:
+		var show_sing: bool = _singularity_blend > 0.01
+		_tunnel_singularity_root.visible = show_sing
+		if show_sing:
+			_tunnel_singularity_mat.set_shader_parameter("intensity", _singularity_blend)
+			if _tunnel_void_sphere_inst != null:
+				var sp_scale: float = smoothstep(0.22, 0.96, _singularity_blend)
+				_tunnel_void_sphere_inst.visible = sp_scale > 0.02
+				_tunnel_void_sphere_inst.scale = Vector3.ONE * maxf(0.05, sp_scale)
+			if _tunnel_accretion_mat != null:
+				_tunnel_accretion_mat.set_shader_parameter("opacity", _singularity_blend * 0.24)
+			if _tunnel_accretion_disk_inst != null:
+				_tunnel_accretion_disk_inst.rotation.z += delta * 0.24
 
 	if _tunnel_rings_root != null:
 		_tunnel_rings_root.visible = is_tunnel or _tunnel_blend > 0.45
@@ -399,9 +511,17 @@ func update_environment(delta: float, forward_speed: float, is_hyper: bool, is_t
 			for i: int in range(_tunnel_ring_nodes.size()):
 				var rn: MeshInstance3D = _tunnel_ring_nodes[i]
 				rn.position.z += ring_speed * delta
-				rn.rotation.y += delta * (0.45 if i % 2 == 0 else -0.45)
 				if rn.position.z > 14.0:
 					rn.position.z -= 170.0
+				# Согласуем радиус и прозрачность колец с гравитационной воронкой туннеля (строго перпендикулярно оси Z)
+				var depth_t: float = clampf((23.0 - rn.position.z) / 210.0, 0.0, 1.0)
+				var funnel: float = smoothstep(0.38, 1.0, depth_t)
+				var r_scale: float = lerpf(1.0, 0.56, funnel * funnel)
+				rn.scale = Vector3(r_scale, 1.0, r_scale)
+				var far_fade: float = clampf((rn.position.z + 168.0) / 48.0, 0.0, 1.0)
+				var near_fade: float = clampf((14.0 - rn.position.z) / 18.0, 0.0, 1.0)
+				var base_c: Color = _tunnel_ring_base_colors[i]
+				_tunnel_ring_mats[i].albedo_color = Color(base_c.r, base_c.g, base_c.b, base_c.a * far_fade * near_fade * _tunnel_blend)
 
 	# Медленный величественный параллакс далёких 3D-планет на горизонте
 	if _planets_root != null:

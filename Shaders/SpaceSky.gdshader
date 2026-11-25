@@ -5,6 +5,7 @@ uniform vec3 nebula_color_b : source_color = vec3(0.32, 0.05, 0.46);
 uniform vec3 core_color : source_color = vec3(0.18, 0.78, 1.0);
 uniform float brightness : hint_range(0.1, 2.0) = 0.85;
 uniform float warp_factor : hint_range(0.0, 1.0) = 0.0;
+uniform float tunnel_factor : hint_range(0.0, 1.0) = 0.0;
 uniform float time_offset = 0.0;
 
 #include "res://Shaders/Noise3DLib.gdshaderinc"
@@ -69,10 +70,17 @@ void sky() {
 	col += nebula_color_a * (cloud_a * 0.22 + galactic_plane * 0.11);
 	col += nebula_color_b * (cloud_b * 0.20 + galactic_plane * n2 * 0.10);
 
-	// Компактное далёкое свечение галактического ядра впереди по курсу (-Z)
+	// Компактное далёкое свечение галактического ядра впереди по курсу (-Z);
+	// внутри 3D Гипер-туннеля ядро уступает место гравитационному колодцу Чёрной дыры
 	float forward_alignment = max(0.0, -dir.z);
-	float core_glow = pow(forward_alignment, 28.0) * (0.15 + 0.26 * warp_factor);
+	float core_glow = pow(forward_alignment, 28.0) * (0.15 + 0.26 * warp_factor) * (1.0 - tunnel_factor * 0.92);
 	col += core_color * core_glow;
+
+	// В туннеле слегка затемняем далёкий центр прямо за сингулярностью для контраста и глубины
+	if (tunnel_factor > 0.01) {
+		float center_pit = pow(forward_alignment, 18.0) * tunnel_factor;
+		col *= (1.0 - center_pit * 0.72);
+	}
 
 	// Рендерим мягкие круглые звёзды только на экранном фоне (!AT_CUBEMAP_PASS), избегая пикселизации кубмапы
 	if (!AT_CUBEMAP_PASS) {
