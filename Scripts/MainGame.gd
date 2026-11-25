@@ -665,8 +665,8 @@ func _update_gameplay_3d(delta: float) -> void:
 		_has_active_black_hole()
 	)
 
-	# Автоматическая стрельба плазмой и мульти-арсеналом из 3D-глайдера
-	_update_weapons_3d(delta, is_overdrive)
+	# Автоматическая стрельба плазмой и мульти-арсеналом из 3D-глайдера (только при наличии угроз на пути!)
+	_update_weapons_3d(delta, is_overdrive, is_tunnel)
 
 	# Обновление снарядов, объектов космоса и 3D-эффектов
 	_update_projectiles_3d(delta)
@@ -723,9 +723,21 @@ func _update_camera_3d(delta: float, is_hyper: bool, is_tunnel: bool) -> void:
 	_camera.rotation.z = lerpf(_camera.rotation.z, -_glider.current_vel.x * 0.012, clampf(delta * 6.0, 0.0, 1.0))
 
 
-func _update_weapons_3d(delta: float, is_overdrive: bool) -> void:
+func _update_weapons_3d(delta: float, is_overdrive: bool, is_tunnel: bool) -> void:
 	var fire_rate_mult: float = _config.get_plasma_fire_rate_multiplier() * (1.25 if is_overdrive else 1.0)
 	var dmg_bonus: float = _config.get_plasma_damage_bonus()
+
+	# В бонусном 3D Гипер-туннеле нет врагов и метеоритов — автоматика переходит в мирный режим,
+	# а таймеры собранного спецоружия ставятся на паузу и не сгорают впустую!
+	if is_tunnel:
+		_glider.update_target_lock(false, Vector3.ZERO, delta)
+		_glider.hide_quantum_laser()
+		_cd_base_plasma = maxf(0.0, _cd_base_plasma - delta * fire_rate_mult)
+		_cd_heavy_plasma = maxf(0.0, _cd_heavy_plasma - delta * fire_rate_mult)
+		_cd_vulcan = maxf(0.0, _cd_vulcan - delta * fire_rate_mult)
+		_cd_missile = maxf(0.0, _cd_missile - delta * fire_rate_mult)
+		_cd_drones = maxf(0.0, _cd_drones - delta)
+		return
 
 	if _timer_heavy_plasma > 0.0:
 		_timer_heavy_plasma = maxf(0.0, _timer_heavy_plasma - delta)
@@ -735,12 +747,16 @@ func _update_weapons_3d(delta: float, is_overdrive: bool) -> void:
 		_timer_laser = maxf(0.0, _timer_laser - delta)
 
 	# Умный 3D-автозахват прицела (Target Lock-On) на ближайшую угрозу впереди по курсу
-	var lock_target: SpaceEntity3D = _find_best_meteor_target(68.0, 6.2)
+	var lock_target: SpaceEntity3D = _find_best_meteor_target(72.0, 5.8)
 	_glider.update_target_lock(lock_target != null, lock_target.global_position if lock_target != null else Vector3.ZERO, delta)
 
-	# 1. Базовая спаренная Плазма из крыльевых орудий глайдера (работает всегда, с мягким доворотом на захваченную 3D-цель!)
-	_cd_base_plasma -= delta * fire_rate_mult
-	if _cd_base_plasma <= 0.0:
+	# Орудия глайдера стреляют автоматически ТОЛЬКО когда на пути впереди есть враги или метеориты
+	var fire_target: SpaceEntity3D = lock_target if lock_target != null else _find_best_meteor_target(128.0, 5.0)
+	var has_forward_threat: bool = fire_target != null
+
+	# 1. Базовая спаренная Плазма из крыльевых орудий глайдера (с мягким доворотом на захваченную 3D-цель!)
+	_cd_base_plasma = maxf(0.0, _cd_base_plasma - delta * fire_rate_mult)
+	if has_forward_threat and _cd_base_plasma <= 0.0:
 		_cd_base_plasma = 0.22
 		var muzzles: Array[Vector3] = _glider.get_muzzle_positions()
 		for m_pos: Vector3 in muzzles:
@@ -760,8 +776,8 @@ func _update_weapons_3d(delta: float, is_overdrive: bool) -> void:
 
 	# 2. Тяжёлая Изумрудно-Золотая Плазма с взрывной волной
 	if _timer_heavy_plasma > 0.0:
-		_cd_heavy_plasma -= delta * fire_rate_mult
-		if _cd_heavy_plasma <= 0.0:
+		_cd_heavy_plasma = maxf(0.0, _cd_heavy_plasma - delta * fire_rate_mult)
+		if has_forward_threat and _cd_heavy_plasma <= 0.0:
 			_cd_heavy_plasma = 0.42
 			var nose_pos: Vector3 = _glider.get_nose_muzzle_position()
 			_spawn_projectile(
@@ -775,8 +791,8 @@ func _update_weapons_3d(delta: float, is_overdrive: bool) -> void:
 
 	# 3. Скорострельный Пулемёт «Вулкан»
 	if _timer_vulcan > 0.0:
-		_cd_vulcan -= delta * fire_rate_mult
-		if _cd_vulcan <= 0.0:
+		_cd_vulcan = maxf(0.0, _cd_vulcan - delta * fire_rate_mult)
+		if has_forward_threat and _cd_vulcan <= 0.0:
 			_cd_vulcan = 0.11
 			var muzzles_v: Array[Vector3] = _glider.get_muzzle_positions()
 			for m_pos: Vector3 in muzzles_v:
@@ -813,7 +829,7 @@ func _update_weapons_3d(delta: float, is_overdrive: bool) -> void:
 
 	# 5. Самонаводящиеся 3D-Ракеты
 	if _ammo_missiles > 0:
-		_cd_missile -= delta * fire_rate_mult
+		_cd_missile = maxf(0.0, _cd_missile - delta * fire_rate_mult)
 		if _cd_missile <= 0.0:
 			var m_target: SpaceEntity3D = _find_best_meteor_target(125.0, 14.0)
 			if m_target != null:
@@ -832,21 +848,23 @@ func _update_weapons_3d(delta: float, is_overdrive: bool) -> void:
 				)
 				_audio.play_missile_launch()
 
-	# 6. Крыльевые 3D-Дроны (апгрейд Ангара)
+	# 6. Крыльевые 3D-Дроны (апгрейд Ангара — также стреляют только при наличии угроз впереди)
 	if _config.upg_wing_drones > 0:
-		_cd_drones -= delta
+		_cd_drones = maxf(0.0, _cd_drones - delta)
 		var drone_interval: float = maxf(0.40, 0.72 - float(_config.upg_wing_drones) * 0.06)
 		if _cd_drones <= 0.0:
-			_cd_drones = drone_interval
-			var d_muzzles: Array[Vector3] = _glider.get_drone_muzzle_positions()
-			for dm_pos: Vector3 in d_muzzles:
-				var dp: WeaponProjectile3D = _spawn_projectile(
-					WeaponProjectile3D.Kind.PLASMA_BASE,
-					dm_pos,
-					Vector3(0.0, 0.0, -115.0),
-					0.0
-				)
-				dp.damage = 10.0 + float(_config.upg_wing_drones) * 1.5 + dmg_bonus * 0.25
+			var drone_target: SpaceEntity3D = fire_target if fire_target != null else _find_best_meteor_target(128.0, 7.2)
+			if drone_target != null:
+				_cd_drones = drone_interval
+				var d_muzzles: Array[Vector3] = _glider.get_drone_muzzle_positions()
+				for dm_pos: Vector3 in d_muzzles:
+					var dp: WeaponProjectile3D = _spawn_projectile(
+						WeaponProjectile3D.Kind.PLASMA_BASE,
+						dm_pos,
+						Vector3(0.0, 0.0, -115.0),
+						0.0
+					)
+					dp.damage = 10.0 + float(_config.upg_wing_drones) * 1.5 + dmg_bonus * 0.25
 
 
 func _spawn_projectile(
@@ -920,7 +938,7 @@ func _find_best_meteor_target(max_dist_z: float, max_xy_offset: float) -> SpaceE
 		if dz < 1.5 or dz > max_dist_z:
 			continue
 		var dxy: float = Vector2(ent.global_position.x - g_pos.x, ent.global_position.y - g_pos.y).length()
-		var max_off: float = max_xy_offset + (2.5 if ent.kind == SpaceEntity3D.Kind.ENEMY_BOSS_3D else 0.0)
+		var max_off: float = max_xy_offset + ent.radius + (2.0 if ent.kind == SpaceEntity3D.Kind.ENEMY_BOSS_3D else 0.0)
 		if dxy > max_off:
 			continue
 		var score_val: float = dz + dxy * 2.4 - (12.0 if ent.is_enemy_ship() else 0.0)
@@ -1380,11 +1398,12 @@ func _enter_hyper_tunnel(bh_pos: Vector3) -> void:
 	_show_banner("ПРОРЫВ СКВОЗЬ ЧЁРНУЮ ДЫРУ -> 3D ГИПЕР-ТУННЕЛЬ!", Color(0.42, 1.0, 0.85), 3.4)
 	_spawn_floating_3d_text(bh_pos, "ГИПЕР-ТУННЕЛЬ +500!", Color(0.85, 0.45, 1.0))
 
-	# Расчищаем все текущие метеориты эффектной 3D-волной при входе в Чёрную дыру
+	# Расчищаем текущие метеориты, вражеские корабли и вражеские снаряды при входе в Чёрную дыру
+	_clear_enemy_projectiles(true)
 	var entities_src: Array[Node] = _frame_entities if not _frame_entities.is_empty() else _entities_root.get_children()
 	for child: Node in entities_src:
 		var ent := child as SpaceEntity3D
-		if ent != null and ent.is_meteor():
+		if ent != null and ent.is_hostile() and ent.kind != SpaceEntity3D.Kind.ENEMY_BOSS_3D:
 			_fx3d.spawn_meteor_explosion(ent.global_position, ent.radius, Color(0.75, 0.35, 1.0), false)
 			ent.queue_free()
 
