@@ -232,25 +232,38 @@ func spawn_hit_spark(world_pos: Vector3, col: Color) -> void:
 	})
 
 
+## Единый геометрический хелпер ориентации 3D-цилиндра (ось Y -> вдоль отрезка from_pos..to_pos)
+static func orient_cylinder_between(
+	node: Node3D,
+	from_pos: Vector3,
+	to_pos: Vector3,
+	radius_scale: float = 1.0,
+	min_dist: float = 0.05
+) -> bool:
+	var diff: Vector3 = to_pos - from_pos
+	var dist: float = diff.length()
+	if dist < min_dist:
+		return false
+	node.global_position = from_pos + diff * 0.5
+	var dir: Vector3 = diff / dist
+	var up_ref: Vector3 = Vector3.RIGHT if absf(dir.dot(Vector3.UP)) > 0.95 else Vector3.UP
+	var x_axis: Vector3 = up_ref.cross(dir).normalized() * radius_scale
+	var z_axis: Vector3 = dir.cross(x_axis).normalized() * radius_scale
+	node.global_transform.basis = Basis(x_axis, dir * dist, z_axis)
+	return true
+
+
 ## 3D-дуга молнии между глайдером и объектом при манёвре «На грани» или цепном 3D-лазере
 func spawn_graze_arc(from_pos: Vector3, to_pos: Vector3, col: Color = Color(0.28, 0.96, 1.0)) -> void:
 	_ensure_meshes()
-	var diff: Vector3 = to_pos - from_pos
-	var dist: float = diff.length()
-	if dist < 0.2:
+	if from_pos.distance_squared_to(to_pos) < 0.04:
 		return
 
 	var pair: Dictionary = _acquire_fx_node(_arc_cyl_mesh)
 	var arc := pair["node"] as MeshInstance3D
 	var mat := pair["mat"] as StandardMaterial3D
 	mat.albedo_color = col
-
-	arc.global_position = from_pos + diff * 0.5
-	var dir: Vector3 = diff / dist
-	var up_ref: Vector3 = Vector3.RIGHT if absf(dir.dot(Vector3.UP)) > 0.95 else Vector3.UP
-	var x_axis: Vector3 = up_ref.cross(dir).normalized()
-	var z_axis: Vector3 = dir.cross(x_axis).normalized()
-	arc.global_transform.basis = Basis(x_axis, dir * dist, z_axis)
+	orient_cylinder_between(arc, from_pos, to_pos, 1.0, 0.2)
 
 	_effects.append({
 		"type": "arc_fade",
@@ -288,22 +301,14 @@ func spawn_engine_wake_ring(world_pos: Vector3, col: Color) -> void:
 ## Парные вихревые трассеры с кончиков крыльев (Winglets) при манёврах и 360°-Бочке
 func spawn_wingtip_trail_segment(from_pos: Vector3, to_pos: Vector3, col: Color) -> void:
 	_ensure_meshes()
-	var diff: Vector3 = to_pos - from_pos
-	var dist: float = diff.length()
-	if dist < 0.05:
+	if from_pos.distance_squared_to(to_pos) < 0.0025:
 		return
 
 	var pair: Dictionary = _acquire_fx_node(_arc_cyl_mesh)
 	var seg := pair["node"] as MeshInstance3D
 	var mat := pair["mat"] as StandardMaterial3D
 	mat.albedo_color = Color(col.r, col.g, col.b, 0.55)
-
-	seg.global_position = from_pos + diff * 0.5
-	var dir: Vector3 = diff / dist
-	var up_ref: Vector3 = Vector3.RIGHT if absf(dir.dot(Vector3.UP)) > 0.95 else Vector3.UP
-	var x_axis: Vector3 = up_ref.cross(dir).normalized() * 0.26
-	var z_axis: Vector3 = dir.cross(x_axis).normalized() * 0.26
-	seg.global_transform.basis = Basis(x_axis, dir * dist, z_axis)
+	orient_cylinder_between(seg, from_pos, to_pos, 0.26, 0.05)
 
 	_effects.append({
 		"type": "wing_trail",

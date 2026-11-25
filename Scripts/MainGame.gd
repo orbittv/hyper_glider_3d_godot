@@ -31,6 +31,7 @@ var _fx3d: FxManager3D
 var _director: SpawnDirector3D
 
 var _entities_root: Node3D
+var _frame_entities: Array[Node] = []
 var _projectiles_root: Node3D
 var _active_projectiles: Array[WeaponProjectile3D] = []
 var _free_projectiles: Array[WeaponProjectile3D] = []
@@ -230,6 +231,15 @@ func _notification(what: int) -> void:
 				_config.save_data()
 
 
+func _award_crystals(amount: int, save_now: bool = false) -> void:
+	if amount <= 0 or _config == null:
+		return
+	_run_crystals += amount
+	_config.add_crystals(amount, save_now)
+	if not save_now:
+		_crystals_dirty_save = true
+
+
 func _bank_uncommitted_credits() -> void:
 	if _config == null:
 		return
@@ -238,12 +248,21 @@ func _bank_uncommitted_credits() -> void:
 		var whole: int = (_score - _last_banked_score) / GameConfig.SCORE_PER_BONUS_CRYSTAL
 		if whole > 0:
 			_last_banked_score += whole * GameConfig.SCORE_PER_BONUS_CRYSTAL
-			_run_crystals += whole
-			_config.add_crystals(whole, false)
-			_crystals_dirty_save = true
+			_award_crystals(whole, false)
 	if _crystals_dirty_save:
 		_crystals_dirty_save = false
 		_config.save_data()
+
+
+func _open_hangar_overlay() -> void:
+	_audio.play_ui_click()
+	_refresh_hangar_ui()
+	_hangar_overlay.visible = true
+
+
+func _open_settings_overlay() -> void:
+	_audio.play_ui_click()
+	_settings_overlay.visible = true
 
 
 func _close_all_modals() -> void:
@@ -626,6 +645,9 @@ func _update_gameplay_3d(delta: float) -> void:
 	_update_camera_3d(delta, is_hyper, is_tunnel)
 	_env3d.update_environment(delta, current_forward_speed, is_hyper, is_tunnel)
 
+	# Единый снимок активных 3D-объектов на текущий кадр (без 6..8 повторных get_children())
+	_frame_entities = _entities_root.get_children()
+
 	# Спавн 3D-метеоритов, сфер и Чёрных дыр
 	_director.update_spawning(
 		delta,
@@ -643,6 +665,7 @@ func _update_gameplay_3d(delta: float) -> void:
 	# Обновление снарядов, объектов космоса и 3D-эффектов
 	_update_projectiles_3d(delta)
 	_update_entities_3d(delta, speed_mult * mode_mult, is_hyper or is_tunnel)
+	_frame_entities.clear()
 	_fx3d.update_effects(delta)
 	_update_hud_ui()
 
@@ -880,7 +903,8 @@ func _find_best_meteor_target(max_dist_z: float, max_xy_offset: float) -> SpaceE
 	var best_score: float = 999999.0
 	var g_pos: Vector3 = _glider.global_position
 
-	for child: Node in _entities_root.get_children():
+	var entities_src: Array[Node] = _frame_entities if not _frame_entities.is_empty() else _entities_root.get_children()
+	for child: Node in entities_src:
 		var ent := child as SpaceEntity3D
 		if ent == null or not ent.is_hostile() or ent.is_destroyed or ent.is_queued_for_deletion():
 			continue
@@ -904,7 +928,8 @@ func _find_chain_laser_target(primary: SpaceEntity3D, max_chain_dist: float) -> 
 	var best: SpaceEntity3D = null
 	var best_d: float = max_chain_dist
 	var p_pos: Vector3 = primary.global_position
-	for child: Node in _entities_root.get_children():
+	var entities_src: Array[Node] = _frame_entities if not _frame_entities.is_empty() else _entities_root.get_children()
+	for child: Node in entities_src:
 		var ent := child as SpaceEntity3D
 		if ent == null or ent == primary or not ent.is_hostile() or ent.is_destroyed or ent.is_queued_for_deletion():
 			continue
@@ -918,7 +943,7 @@ func _find_chain_laser_target(primary: SpaceEntity3D, max_chain_dist: float) -> 
 func _update_projectiles_3d(delta: float) -> void:
 	var g_pos: Vector3 = _glider.global_position
 	var is_warp_invuln: bool = (_hyper_timer > 0.0 or _tunnel_timer > 0.0)
-	var entities_list: Array[Node] = _entities_root.get_children()
+	var entities_list: Array[Node] = _frame_entities if not _frame_entities.is_empty() else _entities_root.get_children()
 
 	var i: int = _active_projectiles.size() - 1
 	while i >= 0:
@@ -1107,7 +1132,8 @@ func _update_entities_3d(delta: float, speed_mult: float, is_invulnerable_warp: 
 	var glider_hit_r: float = 1.35
 	var graze_r: float = 3.25
 
-	for child: Node in _entities_root.get_children():
+	var entities_src: Array[Node] = _frame_entities if not _frame_entities.is_empty() else _entities_root.get_children()
+	for child: Node in entities_src:
 		var ent := child as SpaceEntity3D
 		if ent == null or ent.is_queued_for_deletion():
 			continue
@@ -1240,9 +1266,7 @@ func _collect_orb(ent: SpaceEntity3D) -> void:
 			_audio.play_shield_restore()
 		SpaceEntity3D.Kind.ORB_QUANTUM_CRYSTAL:
 			var cr_val: int = maxi(1, ent.crystal_value)
-			_run_crystals += cr_val
-			_config.add_crystals(cr_val, false)
-			_crystals_dirty_save = true
+			_award_crystals(cr_val, false)
 			_score += 60 * cr_val * _combo
 			_audio.play_orb_pickup(true, _combo)
 			var cr_col: Color = Color(1.0, 0.88, 0.28) if cr_val > 1 else Color(0.45, 0.95, 1.0)
@@ -1314,7 +1338,8 @@ func _enter_hyper_tunnel(bh_pos: Vector3) -> void:
 	_spawn_floating_3d_text(bh_pos, "ГИПЕР-ТУННЕЛЬ +500!", Color(0.85, 0.45, 1.0))
 
 	# Расчищаем все текущие метеориты эффектной 3D-волной при входе в Чёрную дыру
-	for child: Node in _entities_root.get_children():
+	var entities_src: Array[Node] = _frame_entities if not _frame_entities.is_empty() else _entities_root.get_children()
+	for child: Node in entities_src:
 		var ent := child as SpaceEntity3D
 		if ent != null and ent.is_meteor():
 			_fx3d.spawn_meteor_explosion(ent.global_position, ent.radius, Color(0.75, 0.35, 1.0), false)
@@ -1353,7 +1378,8 @@ func _try_activate_hyper_core() -> void:
 
 
 func _has_active_black_hole() -> bool:
-	for child: Node in _entities_root.get_children():
+	var entities_src: Array[Node] = _frame_entities if not _frame_entities.is_empty() else _entities_root.get_children()
+	for child: Node in entities_src:
 		var ent := child as SpaceEntity3D
 		if ent != null and ent.kind == SpaceEntity3D.Kind.BLACK_HOLE_PORTAL:
 			return true
@@ -1473,6 +1499,7 @@ func _update_floating_labels(delta: float) -> void:
 func _clear_world_entities() -> void:
 	Engine.time_scale = 1.0
 	_slowmo_timer = 0.0
+	_frame_entities.clear()
 	for c: Node in _entities_root.get_children():
 		c.queue_free()
 	var p_i: int = _active_projectiles.size() - 1
@@ -1580,9 +1607,8 @@ func _trigger_game_over() -> void:
 	var is_new_rec: bool = _config.register_run_result(_is_assault_mode, _score, _wave)
 	_bank_uncommitted_credits()
 	var wave_bonus_crystals: int = maxi(1, _wave / 2)
-	_run_crystals += wave_bonus_crystals
-	_config.add_crystals(wave_bonus_crystals, true)
-	_config.save_data()
+	_award_crystals(wave_bonus_crystals, true)
+	_crystals_dirty_save = false
 	var earned_credits: int = _run_crystals
 
 	var mode_title: String = "ГИПЕР-ШТУРМ 3D" if _is_assault_mode else "КОСМО-РЕЙД 3D"
@@ -1681,24 +1707,15 @@ func _build_boot_loader_ui() -> void:
 	)
 	b_vbox.add_child(_lbl_boot_status)
 
-	_bar_boot_load = ProgressBar.new()
-	_bar_boot_load.min_value = 0.0
-	_bar_boot_load.max_value = 100.0
+	_bar_boot_load = UiBuilder.create_neon_progress_bar(
+		14.0,
+		Color(0.01, 0.03, 0.08, 0.95),
+		Color(0.20, 0.72, 0.92, 0.65),
+		Color(0.18, 0.96, 0.84, 0.98),
+		7,
+		1
+	)
 	_bar_boot_load.value = 10.0
-	_bar_boot_load.show_percentage = false
-	_bar_boot_load.custom_minimum_size = Vector2(0.0, 14.0)
-
-	var sb_bg := StyleBoxFlat.new()
-	sb_bg.bg_color = Color(0.01, 0.03, 0.08, 0.95)
-	sb_bg.border_color = Color(0.20, 0.72, 0.92, 0.65)
-	sb_bg.set_border_width_all(1)
-	sb_bg.set_corner_radius_all(7)
-	_bar_boot_load.add_theme_stylebox_override("background", sb_bg)
-
-	var sb_fg := StyleBoxFlat.new()
-	sb_fg.bg_color = Color(0.18, 0.96, 0.84, 0.98)
-	sb_fg.set_corner_radius_all(7)
-	_bar_boot_load.add_theme_stylebox_override("fill", sb_fg)
 	b_vbox.add_child(_bar_boot_load)
 
 	_boot_step = 0
@@ -1905,25 +1922,15 @@ func _build_hud_ui() -> void:
 	_hyper_hbox.add_theme_constant_override("separation", 8)
 	_hud_root.add_child(_hyper_hbox)
 
-	_bar_hyper = ProgressBar.new()
-	_bar_hyper.min_value = 0.0
-	_bar_hyper.max_value = 100.0
-	_bar_hyper.value = 0.0
-	_bar_hyper.show_percentage = false
-	_bar_hyper.custom_minimum_size = Vector2(0.0, 30.0)
+	_bar_hyper = UiBuilder.create_neon_progress_bar(
+		30.0,
+		Color(0.01, 0.03, 0.08, 0.92),
+		Color(0.20, 0.65, 0.88, 0.65),
+		Color(0.22, 0.94, 0.82, 0.92),
+		8,
+		1
+	)
 	_bar_hyper.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-
-	var sb_bg := StyleBoxFlat.new()
-	sb_bg.bg_color = Color(0.01, 0.03, 0.08, 0.92)
-	sb_bg.border_color = Color(0.20, 0.65, 0.88, 0.65)
-	sb_bg.set_border_width_all(1)
-	sb_bg.set_corner_radius_all(8)
-	_bar_hyper.add_theme_stylebox_override("background", sb_bg)
-
-	var sb_fg := StyleBoxFlat.new()
-	sb_fg.bg_color = Color(0.22, 0.94, 0.82, 0.92)
-	sb_fg.set_corner_radius_all(8)
-	_bar_hyper.add_theme_stylebox_override("fill", sb_fg)
 	_hyper_hbox.add_child(_bar_hyper)
 
 	_btn_hyper = UiBuilder.create_neon_button(
@@ -1996,20 +2003,15 @@ func _build_hud_ui() -> void:
 	_lbl_boss_title = UiBuilder.create_label("КРЕЙСЕР «ТИТАН-3D»", 12, Color(1.0, 0.58, 0.72), HORIZONTAL_ALIGNMENT_CENTER)
 	boss_vbox.add_child(_lbl_boss_title)
 
-	_bar_boss_hp = ProgressBar.new()
-	_bar_boss_hp.min_value = 0.0
-	_bar_boss_hp.max_value = 100.0
+	_bar_boss_hp = UiBuilder.create_neon_progress_bar(
+		10.0,
+		Color(0.06, 0.01, 0.03, 0.95),
+		Color(0.0, 0.0, 0.0, 0.0),
+		Color(1.0, 0.24, 0.46, 0.98),
+		5,
+		0
+	)
 	_bar_boss_hp.value = 100.0
-	_bar_boss_hp.show_percentage = false
-	_bar_boss_hp.custom_minimum_size = Vector2(0.0, 10.0)
-	var b_bg := StyleBoxFlat.new()
-	b_bg.bg_color = Color(0.06, 0.01, 0.03, 0.95)
-	b_bg.set_corner_radius_all(5)
-	_bar_boss_hp.add_theme_stylebox_override("background", b_bg)
-	var b_fg := StyleBoxFlat.new()
-	b_fg.bg_color = Color(1.0, 0.24, 0.46, 0.98)
-	b_fg.set_corner_radius_all(5)
-	_bar_boss_hp.add_theme_stylebox_override("fill", b_fg)
 	boss_vbox.add_child(_bar_boss_hp)
 
 
@@ -2241,18 +2243,11 @@ func _build_menu_overlay() -> void:
 	vbox.add_child(_btn_start_launch)
 
 	var btn_hangar := UiBuilder.create_secondary_button("АНГАР 3D-АПГРЕЙДОВ", 52.0, 17)
-	btn_hangar.pressed.connect(func() -> void:
-		_audio.play_ui_click()
-		_refresh_hangar_ui()
-		_hangar_overlay.visible = true
-	)
+	btn_hangar.pressed.connect(_open_hangar_overlay)
 	vbox.add_child(btn_hangar)
 
 	var btn_settings := UiBuilder.create_secondary_button("НАСТРОЙКИ 3D И ЗВУКА", 50.0, 17)
-	btn_settings.pressed.connect(func() -> void:
-		_audio.play_ui_click()
-		_settings_overlay.visible = true
-	)
+	btn_settings.pressed.connect(_open_settings_overlay)
 	vbox.add_child(btn_settings)
 
 	var hint_lbl := UiBuilder.create_label(
@@ -2287,12 +2282,12 @@ func _build_pause_overlay() -> void:
 		VIEW_W,
 		VIEW_H,
 		34.0,
-		360.0,
+		420.0,
 		Color(0.02, 0.06, 0.15, 0.94),
 		Color(0.32, 0.92, 1.0, 0.88)
 	)
 	_pause_overlay = modal["root"]
-	_modal_cards.append({"card": modal["card"], "margin_x": 34.0, "card_h": 360.0})
+	_modal_cards.append({"card": modal["card"], "margin_x": 34.0, "card_h": 420.0})
 	var vbox: VBoxContainer = modal["vbox"]
 
 	vbox.add_child(UiBuilder.create_label("ПАУЗА", 26, Color(0.38, 0.96, 1.0), HORIZONTAL_ALIGNMENT_CENTER, 3))
@@ -2301,11 +2296,12 @@ func _build_pause_overlay() -> void:
 	btn_resume.pressed.connect(func() -> void: _toggle_pause(false))
 	vbox.add_child(btn_resume)
 
-	var btn_settings := UiBuilder.create_secondary_button("НАСТРОЙКИ", 50.0, 17)
-	btn_settings.pressed.connect(func() -> void:
-		_audio.play_ui_click()
-		_settings_overlay.visible = true
-	)
+	var btn_hangar := UiBuilder.create_secondary_button("АНГАР 3D-АПГРЕЙДОВ", 48.0, 16)
+	btn_hangar.pressed.connect(_open_hangar_overlay)
+	vbox.add_child(btn_hangar)
+
+	var btn_settings := UiBuilder.create_secondary_button("НАСТРОЙКИ", 48.0, 16)
+	btn_settings.pressed.connect(_open_settings_overlay)
 	vbox.add_child(btn_settings)
 
 	var btn_menu := UiBuilder.create_danger_button("В ГЛАВНОЕ МЕНЮ", 50.0, 17)
@@ -2341,11 +2337,7 @@ func _build_gameover_overlay() -> void:
 	vbox.add_child(btn_retry)
 
 	var btn_hangar := UiBuilder.create_secondary_button("АНГАР 3D-АПГРЕЙДОВ", 52.0, 17)
-	btn_hangar.pressed.connect(func() -> void:
-		_audio.play_ui_click()
-		_refresh_hangar_ui()
-		_hangar_overlay.visible = true
-	)
+	btn_hangar.pressed.connect(_open_hangar_overlay)
 	vbox.add_child(btn_hangar)
 
 	var btn_menu := UiBuilder.create_secondary_button("ГЛАВНОЕ МЕНЮ", 50.0, 17)

@@ -238,6 +238,36 @@ static func apply_button_colors(btn: Button, bg_col: Color, border_col: Color) -
 		sb_p.border_color = Color.WHITE
 
 
+static func create_neon_progress_bar(
+	height: float,
+	bg_col: Color,
+	border_col: Color,
+	fill_col: Color,
+	radius: int = 7,
+	border_w: int = 1
+) -> ProgressBar:
+	var bar := ProgressBar.new()
+	bar.min_value = 0.0
+	bar.max_value = 100.0
+	bar.value = 0.0
+	bar.show_percentage = false
+	bar.custom_minimum_size = Vector2(0.0, height)
+
+	var sb_bg := StyleBoxFlat.new()
+	sb_bg.bg_color = bg_col
+	sb_bg.border_color = border_col
+	if border_w > 0:
+		sb_bg.set_border_width_all(border_w)
+	sb_bg.set_corner_radius_all(radius)
+	bar.add_theme_stylebox_override("background", sb_bg)
+
+	var sb_fg := StyleBoxFlat.new()
+	sb_fg.bg_color = fill_col
+	sb_fg.set_corner_radius_all(radius)
+	bar.add_theme_stylebox_override("fill", sb_fg)
+	return bar
+
+
 static func create_modal_overlay(
 	parent: Control,
 	view_w: float,

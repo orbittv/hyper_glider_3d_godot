@@ -658,24 +658,13 @@ func show_quantum_laser(target_world_pos: Vector3, is_overdrive: bool = false) -
 	if _laser_beam_mesh == null:
 		return
 	var start_pos: Vector3 = global_position + Vector3(0.0, 0.05, -2.2)
-	var diff: Vector3 = target_world_pos - start_pos
-	var dist: float = diff.length()
-	if dist < 0.5:
+	if not FxManager3D.orient_cylinder_between(_laser_beam_mesh, start_pos, target_world_pos, 1.0, 0.5):
 		_laser_beam_mesh.visible = false
 		return
 
 	_laser_beam_mesh.visible = true
 	if _laser_beam_mat != null:
 		_laser_beam_mat.albedo_color = Color(1.0, 0.42, 0.95, 0.86) if is_overdrive else Color(0.22, 0.96, 1.0, 0.78)
-	var mid_pos: Vector3 = start_pos + diff * 0.5
-	_laser_beam_mesh.global_position = mid_pos
-
-	# Ориентируем цилиндр луча вдоль вектора diff (ось Y цилиндра -> вдоль diff)
-	var dir: Vector3 = diff / dist
-	var up_ref: Vector3 = Vector3.RIGHT if absf(dir.dot(Vector3.UP)) > 0.95 else Vector3.UP
-	var x_axis: Vector3 = up_ref.cross(dir).normalized()
-	var z_axis: Vector3 = dir.cross(x_axis).normalized()
-	_laser_beam_mesh.global_transform.basis = Basis(x_axis, dir * dist, z_axis)
 
 
 func hide_quantum_laser() -> void:

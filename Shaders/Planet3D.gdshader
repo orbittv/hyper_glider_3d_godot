@@ -9,24 +9,7 @@ uniform vec3 sun_dir = vec3(-0.55, 0.48, 0.68);
 varying vec3 v_local_pos;
 varying vec3 v_world_normal;
 
-float hash31(vec3 p) {
-	p = fract(p * vec3(443.897, 441.423, 437.195));
-	p += dot(p, p.yzx + 19.19);
-	return fract((p.x + p.y) * p.z);
-}
-
-float noise3(vec3 p) {
-	vec3 i = floor(p);
-	vec3 f = fract(p);
-	f = f * f * (3.0 - 2.0 * f);
-	return mix(
-		mix(mix(hash31(i), hash31(i + vec3(1.0, 0.0, 0.0)), f.x),
-			mix(hash31(i + vec3(0.0, 1.0, 0.0)), hash31(i + vec3(1.0, 1.0, 0.0)), f.x), f.y),
-		mix(mix(hash31(i + vec3(0.0, 0.0, 1.0)), hash31(i + vec3(1.0, 0.0, 1.0)), f.x),
-			mix(hash31(i + vec3(0.0, 1.0, 1.0)), hash31(i + vec3(1.0, 1.0, 1.0)), f.x), f.y),
-		f.z
-	);
-}
+#include "res://Shaders/Noise3DLib.gdshaderinc"
 
 void vertex() {
 	v_local_pos = normalize(VERTEX);
