@@ -42,10 +42,13 @@ func update_spawning(
 		_update_tunnel_spawns(delta, entities_root, forward_speed)
 		return
 
-	var intensity: float = (1.28 if is_assault_mode else 1.0) * (1.0 + float(wave_num - 1) * 0.08)
+	# Умный потолок плотности потока на высоких волнах (без непроходимой стены камней и просадок FPS!)
+	var raw_intensity: float = (1.28 if is_assault_mode else 1.0) * (1.0 + float(wave_num - 1) * 0.075)
+	var meteor_intensity: float = clampf(raw_intensity, 1.0, 2.45)
+	var pattern_intensity: float = clampf(raw_intensity, 1.0, 1.85)
 
-	# 1. Одиночные и парные 3D-метеориты
-	_meteor_timer -= delta * intensity
+	# 1. Одиночные и парные 3D-метеориты и элитные корабли
+	_meteor_timer -= delta * meteor_intensity
 	if _meteor_timer <= 0.0:
 		_meteor_timer = randf_range(0.34, 0.64)
 		_spawn_random_meteor(entities_root, wave_num, forward_speed)
@@ -55,7 +58,7 @@ func update_spawning(
 	# 2. Фигурные 3D-паттерны (кольцо астероидов, диагональная гряда, плазменная ловушка, звено 3D-перехватчиков)
 	_pattern_timer -= delta
 	if _pattern_timer <= 0.0:
-		_pattern_timer = randf_range(5.2, 7.8) / clampf(intensity, 1.0, 1.7)
+		_pattern_timer = randf_range(5.2, 7.8) / pattern_intensity
 		var pat: int = randi() % 4
 		if pat == 0:
 			_spawn_meteor_ring_gate(entities_root, wave_num, forward_speed)
@@ -90,18 +93,24 @@ func _spawn_random_meteor(entities_root: Node3D, wave_num: int, forward_speed: f
 	var roll: float = randf()
 	var kind: SpaceEntity3D.Kind = SpaceEntity3D.Kind.METEOR_ROCK
 	var rad: float = randf_range(1.15, 2.35)
+	# На высоких волнах (9..32+) вместо спама камней плавно растёт доля элитных Снайперов, Перехватчиков и Золотых бомб
+	var elite_ratio: float = clampf(float(maxi(0, wave_num - 8)) / 24.0, 0.0, 1.0)
+	var gold_cut: float = 0.23 + elite_ratio * 0.04
+	var crystal_cut: float = gold_cut + 0.11
+	var enemy_cut: float = crystal_cut + 0.14 + elite_ratio * 0.10
+	var sniper_share: float = 0.34 + elite_ratio * 0.22
 
 	if roll < 0.14:
 		kind = SpaceEntity3D.Kind.METEOR_PLASMA_GREEN
 		rad = randf_range(1.45, 2.05)
-	elif roll < 0.23:
+	elif roll < gold_cut:
 		kind = SpaceEntity3D.Kind.METEOR_PLASMA_GOLD
 		rad = randf_range(1.65, 2.25)
-	elif roll < 0.34:
+	elif roll < crystal_cut:
 		kind = SpaceEntity3D.Kind.METEOR_CRYSTAL
 		rad = randf_range(1.35, 1.95)
-	elif roll < 0.48:
-		if wave_num >= 2 and randf() < 0.34:
+	elif roll < enemy_cut:
+		if wave_num >= 2 and randf() < sniper_share:
 			kind = SpaceEntity3D.Kind.ENEMY_SNIPER_3D
 			rad = 1.75
 		else:
@@ -189,6 +198,17 @@ func _spawn_interceptor_squadron(entities_root: Node3D, wave_num: int, forward_s
 			Vector3(side_x, randf_range(-1.8, 2.2), SPAWN_Z - absf(side_x) * 1.5),
 			forward_speed,
 			1.65,
+			wave_num
+		)
+	# На волнах 12+ эскадрилью прикрывает элитный 3D Снайпер-Фантом по центру!
+	if wave_num >= 12:
+		var sniper := SpaceEntity3D.new()
+		entities_root.add_child(sniper)
+		sniper.setup_entity(
+			SpaceEntity3D.Kind.ENEMY_SNIPER_3D,
+			Vector3(0.0, randf_range(-0.6, 2.4), SPAWN_Z - 9.0),
+			forward_speed,
+			1.75,
 			wave_num
 		)
 

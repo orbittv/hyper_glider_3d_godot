@@ -571,7 +571,9 @@ func setup_entity(
 	_visual_root = Node3D.new()
 	add_child(_visual_root)
 
-	var hp_wave_mult: float = 1.0 + float(maxi(0, wave_num - 1)) * 0.14
+	# До 20-й волны классический рост +14%/волна, далее мягкая эндгейм-кривая +7.5%/волна под Оверклок
+	var w_delta: int = maxi(0, wave_num - 1)
+	var hp_wave_mult: float = 1.0 + float(mini(w_delta, 19)) * 0.14 + float(maxi(0, w_delta - 19)) * 0.075
 
 	match kind:
 		Kind.METEOR_ROCK:
@@ -628,16 +630,27 @@ func setup_entity(
 			var boss_idx: int = maxi(0, (wave_num / 3) - 1)
 			boss_tier = 1 + (boss_idx / 4)
 			var arch_idx: int = posmod(boss_idx, 4)
-			var base_boss_hp: float = 460.0 + float(wave_num) * 110.0
+			# Мягкий потолок прироста HP после 24-й волны, но выше темп атак и престиж-тир MK-II / MK-III...
+			var base_boss_hp: float = 460.0 + float(mini(wave_num, 24)) * 110.0 + float(maxi(0, wave_num - 24)) * 75.0
+			var tier_fire_mult: float = pow(0.91, float(mini(boss_tier - 1, 5)))
+			var tier_suffix: String = ""
+			if boss_tier == 2:
+				tier_suffix = " MK-II"
+			elif boss_tier == 3:
+				tier_suffix = " MK-III"
+			elif boss_tier == 4:
+				tier_suffix = " MK-IV"
+			elif boss_tier >= 5:
+				tier_suffix = " MK-%d" % boss_tier
 			spawn_origin_xy = Vector2(0.0, 1.2)
 			velocity = Vector3(0.0, 0.0, forward_vel_z * 0.85)
-			score_value = 1200 + (boss_tier - 1) * 400
+			score_value = 1200 + (boss_tier - 1) * 450
 			if arch_idx == 1:
 				boss_archetype = BossArchetype.PHANTOM_SNIPER
 				radius = 3.55
 				max_hp = base_boss_hp * 0.95
-				boss_title = "ПРИЗРАК «ФАНТОМ-СНАЙПЕР»"
-				fire_interval = 1.82
+				boss_title = "ПРИЗРАК «ФАНТОМ-СНАЙПЕР»" + tier_suffix
+				fire_interval = maxf(1.10, 1.82 * tier_fire_mult)
 				fire_cooldown = 1.35
 				_boss_dash_target = Vector2(3.6, 1.2)
 				_boss_dash_timer = 1.4
@@ -645,22 +658,22 @@ func setup_entity(
 				boss_archetype = BossArchetype.SWARM_CARRIER
 				radius = 4.05
 				max_hp = base_boss_hp * 1.12
-				boss_title = "АВИАНОСЕЦ «РОЙ-МАТКА»"
-				fire_interval = 1.62
+				boss_title = "АВИАНОСЕЦ «РОЙ-МАТКА»" + tier_suffix
+				fire_interval = maxf(0.98, 1.62 * tier_fire_mult)
 				fire_cooldown = 1.25
 			elif arch_idx == 3:
 				boss_archetype = BossArchetype.OMEGA_DREADNOUGHT
 				radius = 4.15
 				max_hp = base_boss_hp * 1.18
-				boss_title = "ДРЕДНОУТ «ЯДРО ОМЕГА-3D»"
-				fire_interval = 1.26
+				boss_title = "ДРЕДНОУТ «ЯДРО ОМЕГА-3D»" + tier_suffix
+				fire_interval = maxf(0.82, 1.26 * tier_fire_mult)
 				fire_cooldown = 1.15
 			else:
 				boss_archetype = BossArchetype.TITAN_CRUISER
 				radius = 3.85
 				max_hp = base_boss_hp
-				boss_title = "КРЕЙСЕР «ТИТАН-3D»"
-				fire_interval = 1.42
+				boss_title = "КРЕЙСЕР «ТИТАН-3D»" + tier_suffix
+				fire_interval = maxf(0.88, 1.42 * tier_fire_mult)
 				fire_cooldown = 1.20
 			hp = max_hp
 			_build_boss_3d_visual()

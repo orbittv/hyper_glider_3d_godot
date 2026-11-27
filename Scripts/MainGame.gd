@@ -614,8 +614,10 @@ func _update_gameplay_3d(delta: float) -> void:
 			else:
 				_show_banner("ВОЛНА %d — СКОРОСТЬ ПОТОКА РАСТЁТ!" % _wave, Color(0.32, 0.96, 1.0), 2.3)
 
-	# Скорость полёта сквозь 3D-космос
-	var wave_speed_add: float = float(_wave - 1) * 2.1
+	# Скорость полёта сквозь 3D-космос (плавный рост до 18-й волны, далее мягкий потолок +52 без туннелинга коллизий!)
+	var base_w_add: float = minf(float(_wave - 1) * 2.1, 35.7)
+	var late_w_add: float = minf(maxf(0.0, float(_wave - 18)) * 0.45, 16.3)
+	var wave_speed_add: float = base_w_add + late_w_add
 	var mode_mult: float = 1.22 if _is_assault_mode else 1.0
 	var speed_mult: float = 1.85 if is_tunnel else (1.55 if is_hyper else 1.0)
 	var current_forward_speed: float = (_base_forward_speed + wave_speed_add) * mode_mult * speed_mult
@@ -1119,7 +1121,8 @@ func _on_meteor_destroyed(ent: SpaceEntity3D) -> void:
 
 	if is_boss:
 		_audio.play_boss_explode()
-		_spawn_crystal_burst(pos, 3, 3)
+		var gold_drop_cnt: int = mini(3 + (ent.boss_tier - 1), 7)
+		_spawn_crystal_burst(pos, gold_drop_cnt, 3)
 		_spawn_crystal_burst(pos, 4 + mini(_wave / 3, 4), 1)
 		_cam_shake = 1.1
 		_trigger_screen_flash(Color(1.0, 0.32, 0.55), 0.48)
