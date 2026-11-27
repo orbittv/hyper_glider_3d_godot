@@ -26,6 +26,13 @@ enum Kind {
 	ENEMY_BOSS_3D
 }
 
+enum BossArchetype {
+	TITAN_CRUISER,
+	PHANTOM_SNIPER,
+	SWARM_CARRIER,
+	OMEGA_DREADNOUGHT
+}
+
 var kind: Kind = Kind.METEOR_ROCK
 var radius: float = 1.6
 var max_hp: float = 40.0
@@ -38,18 +45,25 @@ var grazed: bool = false
 var is_destroyed: bool = false
 var age: float = 0.0
 var boss_title: String = ""
+var boss_archetype: BossArchetype = BossArchetype.TITAN_CRUISER
+var boss_tier: int = 1
 var boss_enraged: bool = false
 var fire_cooldown: float = 1.4
 var fire_interval: float = 1.6
 var spawn_origin_xy: Vector2 = Vector2.ZERO
 var attack_counter: int = 0
 var sniper_aim_pos: Vector3 = Vector3.ZERO
+var boss_aim_points: Array[Vector3] = []
 
 var _visual_root: Node3D
 var _rock_mesh_inst: MeshInstance3D
 var _plasma_core_inst: MeshInstance3D
 var _ring_inst: MeshInstance3D
 var _sniper_sight_inst: MeshInstance3D
+var _boss_aux_nodes: Array[Node3D] = []
+var _boss_sight_insts: Array[MeshInstance3D] = []
+var _boss_dash_target: Vector2 = Vector2.ZERO
+var _boss_dash_timer: float = 0.0
 var _hit_flash_timer: float = 0.0
 var _base_rock_mat: Material
 
@@ -68,6 +82,14 @@ static var _mat_black_hole_disk: ShaderMaterial
 static var _mat_enemy_hull: StandardMaterial3D
 static var _mat_enemy_neon: StandardMaterial3D
 static var _mat_boss_core: StandardMaterial3D
+static var _mat_boss_phantom_neon: StandardMaterial3D
+static var _mat_boss_phantom_core: StandardMaterial3D
+static var _mat_boss_carrier_hull: StandardMaterial3D
+static var _mat_boss_carrier_neon: StandardMaterial3D
+static var _mat_boss_carrier_core: StandardMaterial3D
+static var _mat_boss_omega_hull: StandardMaterial3D
+static var _mat_boss_omega_neon: StandardMaterial3D
+static var _mat_boss_omega_core: StandardMaterial3D
 static var _mat_quantum_crystal: StandardMaterial3D
 static var _mat_quantum_crystal_halo: StandardMaterial3D
 static var _mat_gold_crystal: StandardMaterial3D
@@ -114,6 +136,14 @@ static func clear_static_caches() -> void:
 	_mat_enemy_hull = null
 	_mat_enemy_neon = null
 	_mat_boss_core = null
+	_mat_boss_phantom_neon = null
+	_mat_boss_phantom_core = null
+	_mat_boss_carrier_hull = null
+	_mat_boss_carrier_neon = null
+	_mat_boss_carrier_core = null
+	_mat_boss_omega_hull = null
+	_mat_boss_omega_neon = null
+	_mat_boss_omega_core = null
 	_mat_quantum_crystal = null
 	_mat_quantum_crystal_halo = null
 	_mat_gold_crystal = null
@@ -147,8 +177,14 @@ static func build_shader_warmup_cluster() -> Node3D:
 		_mat_black_hole_disk,
 		_mat_quantum_crystal,
 		_mat_quantum_crystal_halo,
+		_mat_gold_crystal,
 		_mat_enemy_hull,
-		_mat_boss_core
+		_mat_sniper_hull,
+		_mat_sniper_sight,
+		_mat_boost_ring,
+		_mat_boss_core,
+		_mat_boss_carrier_hull,
+		_mat_boss_omega_hull
 	]
 	for i: int in range(mats.size()):
 		var mi := MeshInstance3D.new()
@@ -287,6 +323,46 @@ static func _ensure_shared_assets() -> void:
 	_mat_boss_core.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	_mat_boss_core.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
 	_mat_boss_core.albedo_color = Color(1.0, 0.26, 0.52, 0.90)
+
+	_mat_boss_phantom_neon = StandardMaterial3D.new()
+	_mat_boss_phantom_neon.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_mat_boss_phantom_neon.albedo_color = Color(0.74, 0.28, 1.0)
+
+	_mat_boss_phantom_core = StandardMaterial3D.new()
+	_mat_boss_phantom_core.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_mat_boss_phantom_core.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_mat_boss_phantom_core.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	_mat_boss_phantom_core.albedo_color = Color(0.86, 0.28, 1.0, 0.92)
+
+	_mat_boss_carrier_hull = StandardMaterial3D.new()
+	_mat_boss_carrier_hull.albedo_color = Color(0.08, 0.22, 0.18)
+	_mat_boss_carrier_hull.metallic = 0.80
+	_mat_boss_carrier_hull.roughness = 0.26
+
+	_mat_boss_carrier_neon = StandardMaterial3D.new()
+	_mat_boss_carrier_neon.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_mat_boss_carrier_neon.albedo_color = Color(0.22, 1.0, 0.64)
+
+	_mat_boss_carrier_core = StandardMaterial3D.new()
+	_mat_boss_carrier_core.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_mat_boss_carrier_core.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_mat_boss_carrier_core.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	_mat_boss_carrier_core.albedo_color = Color(0.24, 1.0, 0.68, 0.92)
+
+	_mat_boss_omega_hull = StandardMaterial3D.new()
+	_mat_boss_omega_hull.albedo_color = Color(0.24, 0.14, 0.08)
+	_mat_boss_omega_hull.metallic = 0.88
+	_mat_boss_omega_hull.roughness = 0.20
+
+	_mat_boss_omega_neon = StandardMaterial3D.new()
+	_mat_boss_omega_neon.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_mat_boss_omega_neon.albedo_color = Color(1.0, 0.78, 0.22)
+
+	_mat_boss_omega_core = StandardMaterial3D.new()
+	_mat_boss_omega_core.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_mat_boss_omega_core.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_mat_boss_omega_core.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	_mat_boss_omega_core.albedo_color = Color(1.0, 0.62, 0.16, 0.94)
 
 	_crystal_octa_mesh = _generate_octahedron_crystal_mesh()
 
@@ -549,15 +625,44 @@ func setup_entity(
 			score_value = 180
 			_build_boost_ring_visual()
 		Kind.ENEMY_BOSS_3D:
-			radius = 3.85
-			max_hp = (460.0 + float(wave_num) * 110.0)
-			hp = max_hp
-			score_value = 1200
-			boss_title = "ДРЕДНОУТ «ЯДРО ОМЕГА-3D»" if (wave_num % 6 == 0) else "КРЕЙСЕР «ТИТАН-3D»"
+			var boss_idx: int = maxi(0, (wave_num / 3) - 1)
+			boss_tier = 1 + (boss_idx / 4)
+			var arch_idx: int = posmod(boss_idx, 4)
+			var base_boss_hp: float = 460.0 + float(wave_num) * 110.0
 			spawn_origin_xy = Vector2(0.0, 1.2)
 			velocity = Vector3(0.0, 0.0, forward_vel_z * 0.85)
-			fire_interval = 1.45
-			fire_cooldown = 1.2
+			score_value = 1200 + (boss_tier - 1) * 400
+			if arch_idx == 1:
+				boss_archetype = BossArchetype.PHANTOM_SNIPER
+				radius = 3.55
+				max_hp = base_boss_hp * 0.95
+				boss_title = "ПРИЗРАК «ФАНТОМ-СНАЙПЕР»"
+				fire_interval = 1.82
+				fire_cooldown = 1.35
+				_boss_dash_target = Vector2(3.6, 1.2)
+				_boss_dash_timer = 1.4
+			elif arch_idx == 2:
+				boss_archetype = BossArchetype.SWARM_CARRIER
+				radius = 4.05
+				max_hp = base_boss_hp * 1.12
+				boss_title = "АВИАНОСЕЦ «РОЙ-МАТКА»"
+				fire_interval = 1.62
+				fire_cooldown = 1.25
+			elif arch_idx == 3:
+				boss_archetype = BossArchetype.OMEGA_DREADNOUGHT
+				radius = 4.15
+				max_hp = base_boss_hp * 1.18
+				boss_title = "ДРЕДНОУТ «ЯДРО ОМЕГА-3D»"
+				fire_interval = 1.26
+				fire_cooldown = 1.15
+			else:
+				boss_archetype = BossArchetype.TITAN_CRUISER
+				radius = 3.85
+				max_hp = base_boss_hp
+				boss_title = "КРЕЙСЕР «ТИТАН-3D»"
+				fire_interval = 1.42
+				fire_cooldown = 1.20
+			hp = max_hp
 			_build_boss_3d_visual()
 		Kind.ORB_QUANTUM_CRYSTAL:
 			radius = 1.0
@@ -755,30 +860,175 @@ func _build_interceptor_visual() -> void:
 
 
 func _build_boss_3d_visual() -> void:
-	_base_rock_mat = _mat_enemy_hull
-	_rock_mesh_inst = MeshInstance3D.new()
-	_rock_mesh_inst.mesh = _enemy_body_mesh
-	_rock_mesh_inst.material_override = _mat_enemy_hull
-	_rock_mesh_inst.scale = Vector3(3.2, 2.4, 2.6)
-	_visual_root.add_child(_rock_mesh_inst)
+	_boss_aux_nodes.clear()
+	_boss_sight_insts.clear()
+	boss_aim_points.clear()
 
-	var boss_wings := MeshInstance3D.new()
-	boss_wings.mesh = _enemy_wing_mesh
-	boss_wings.material_override = _mat_enemy_hull
-	boss_wings.scale = Vector3(2.5, 2.2, 2.2)
-	_visual_root.add_child(boss_wings)
+	match boss_archetype:
+		BossArchetype.PHANTOM_SNIPER:
+			_base_rock_mat = _mat_sniper_hull
+			_rock_mesh_inst = MeshInstance3D.new()
+			_rock_mesh_inst.mesh = _enemy_body_mesh
+			_rock_mesh_inst.material_override = _mat_sniper_hull
+			_rock_mesh_inst.scale = Vector3(2.4, 2.0, 3.6)
+			_visual_root.add_child(_rock_mesh_inst)
 
-	_plasma_core_inst = MeshInstance3D.new()
-	_plasma_core_inst.mesh = _orb_sphere_mesh
-	_plasma_core_inst.material_override = _mat_boss_core
-	_plasma_core_inst.scale = Vector3.ONE * 2.8
-	_visual_root.add_child(_plasma_core_inst)
+			for side: float in [-1.0, 1.0]:
+				var blade := MeshInstance3D.new()
+				blade.mesh = _enemy_wing_mesh
+				blade.material_override = _mat_sniper_hull
+				blade.scale = Vector3(1.65, 1.9, 2.35)
+				blade.position = Vector3(side * 2.55, 0.0, -0.35)
+				blade.rotation_degrees = Vector3(0.0, side * 32.0, -side * 16.0)
+				_visual_root.add_child(blade)
 
-	_ring_inst = MeshInstance3D.new()
-	_ring_inst.mesh = _orb_ring_mesh
-	_ring_inst.material_override = _mat_enemy_neon
-	_ring_inst.scale = Vector3.ONE * 4.2
-	_visual_root.add_child(_ring_inst)
+				var neon_edge := MeshInstance3D.new()
+				neon_edge.mesh = _enemy_wing_mesh
+				neon_edge.material_override = _mat_boss_phantom_neon
+				neon_edge.scale = Vector3(1.55, 0.65, 0.35)
+				neon_edge.position = Vector3(side * 2.65, 0.12, 0.55)
+				neon_edge.rotation_degrees = Vector3(0.0, side * 32.0, -side * 16.0)
+				_visual_root.add_child(neon_edge)
+
+			_plasma_core_inst = MeshInstance3D.new()
+			_plasma_core_inst.mesh = _orb_sphere_mesh
+			_plasma_core_inst.material_override = _mat_boss_phantom_core
+			_plasma_core_inst.scale = Vector3.ONE * 2.4
+			_plasma_core_inst.position = Vector3(0.0, 0.15, 0.85)
+			_visual_root.add_child(_plasma_core_inst)
+
+			_ring_inst = MeshInstance3D.new()
+			_ring_inst.mesh = _orb_ring_mesh
+			_ring_inst.material_override = _mat_boss_phantom_neon
+			_ring_inst.scale = Vector3.ONE * 3.85
+			_visual_root.add_child(_ring_inst)
+
+			# До 3 лазерных целеуказателей Босса-Снайпера (2 в обычной фазе, 3 в Ярости)
+			for _i: int in range(3):
+				var sight := MeshInstance3D.new()
+				sight.mesh = _sniper_sight_mesh
+				sight.material_override = _mat_sniper_sight
+				sight.visible = false
+				add_child(sight)
+				_boss_sight_insts.append(sight)
+
+		BossArchetype.SWARM_CARRIER:
+			_base_rock_mat = _mat_boss_carrier_hull
+			_rock_mesh_inst = MeshInstance3D.new()
+			_rock_mesh_inst.mesh = _enemy_body_mesh
+			_rock_mesh_inst.material_override = _mat_boss_carrier_hull
+			_rock_mesh_inst.scale = Vector3(4.2, 2.2, 2.8)
+			_visual_root.add_child(_rock_mesh_inst)
+
+			for side: float in [-1.0, 1.0]:
+				var bay := MeshInstance3D.new()
+				bay.mesh = _enemy_body_mesh
+				bay.material_override = _mat_boss_carrier_hull
+				bay.scale = Vector3(1.55, 1.85, 2.4)
+				bay.position = Vector3(side * 3.5, -0.15, 0.2)
+				_visual_root.add_child(bay)
+
+				var bay_glow := MeshInstance3D.new()
+				bay_glow.mesh = _orb_sphere_mesh
+				bay_glow.material_override = _mat_boss_carrier_core
+				bay_glow.scale = Vector3(1.2, 0.9, 0.9)
+				bay_glow.position = Vector3(side * 3.5, -0.15, 1.65)
+				_visual_root.add_child(bay_glow)
+
+			_plasma_core_inst = MeshInstance3D.new()
+			_plasma_core_inst.mesh = _orb_sphere_mesh
+			_plasma_core_inst.material_override = _mat_boss_carrier_core
+			_plasma_core_inst.scale = Vector3.ONE * 2.75
+			_visual_root.add_child(_plasma_core_inst)
+
+			_ring_inst = MeshInstance3D.new()
+			_ring_inst.mesh = _orb_ring_mesh
+			_ring_inst.material_override = _mat_boss_carrier_neon
+			_ring_inst.scale = Vector3.ONE * 4.6
+			_visual_root.add_child(_ring_inst)
+
+			# 3 вращающихся орбитальных 3D энерго-щита вокруг Авианосца
+			var orbit_pivot := Node3D.new()
+			_visual_root.add_child(orbit_pivot)
+			_boss_aux_nodes.append(orbit_pivot)
+			for s_i: int in range(3):
+				var ang: float = float(s_i) * (TAU / 3.0)
+				var shield_pod := MeshInstance3D.new()
+				shield_pod.mesh = _enemy_wing_mesh
+				shield_pod.material_override = _mat_boss_carrier_neon
+				shield_pod.scale = Vector3(0.55, 2.2, 0.45)
+				shield_pod.position = Vector3(cos(ang) * 4.5, sin(ang) * 3.1, 1.25)
+				shield_pod.rotation.z = ang + PI * 0.5
+				orbit_pivot.add_child(shield_pod)
+
+		BossArchetype.OMEGA_DREADNOUGHT:
+			_base_rock_mat = _mat_boss_omega_hull
+			_rock_mesh_inst = MeshInstance3D.new()
+			_rock_mesh_inst.mesh = _enemy_body_mesh
+			_rock_mesh_inst.material_override = _mat_boss_omega_hull
+			_rock_mesh_inst.scale = Vector3(3.6, 2.7, 3.1)
+			_visual_root.add_child(_rock_mesh_inst)
+
+			var wings := MeshInstance3D.new()
+			wings.mesh = _enemy_wing_mesh
+			wings.material_override = _mat_boss_omega_hull
+			wings.scale = Vector3(2.85, 2.5, 2.4)
+			_visual_root.add_child(wings)
+
+			for side: float in [-1.0, 1.0]:
+				var turret := MeshInstance3D.new()
+				turret.mesh = _enemy_body_mesh
+				turret.material_override = _mat_boss_omega_neon
+				turret.scale = Vector3(0.72, 0.72, 1.8)
+				turret.position = Vector3(side * 3.85, 0.45, 0.85)
+				_visual_root.add_child(turret)
+
+			_plasma_core_inst = MeshInstance3D.new()
+			_plasma_core_inst.mesh = _orb_sphere_mesh
+			_plasma_core_inst.material_override = _mat_boss_omega_core
+			_plasma_core_inst.scale = Vector3.ONE * 3.1
+			_visual_root.add_child(_plasma_core_inst)
+
+			_ring_inst = MeshInstance3D.new()
+			_ring_inst.mesh = _orb_ring_mesh
+			_ring_inst.material_override = _mat_boss_omega_neon
+			_ring_inst.scale = Vector3.ONE * 4.65
+			_visual_root.add_child(_ring_inst)
+
+			var ring_b := MeshInstance3D.new()
+			ring_b.mesh = _orb_ring_mesh
+			ring_b.material_override = _mat_enemy_neon
+			ring_b.scale = Vector3.ONE * 3.9
+			ring_b.rotation_degrees = Vector3(65.0, 35.0, 0.0)
+			_visual_root.add_child(ring_b)
+			_boss_aux_nodes.append(ring_b)
+
+		_:
+			# TITAN_CRUISER
+			_base_rock_mat = _mat_enemy_hull
+			_rock_mesh_inst = MeshInstance3D.new()
+			_rock_mesh_inst.mesh = _enemy_body_mesh
+			_rock_mesh_inst.material_override = _mat_enemy_hull
+			_rock_mesh_inst.scale = Vector3(3.2, 2.4, 2.6)
+			_visual_root.add_child(_rock_mesh_inst)
+
+			var boss_wings := MeshInstance3D.new()
+			boss_wings.mesh = _enemy_wing_mesh
+			boss_wings.material_override = _mat_enemy_hull
+			boss_wings.scale = Vector3(2.5, 2.2, 2.2)
+			_visual_root.add_child(boss_wings)
+
+			_plasma_core_inst = MeshInstance3D.new()
+			_plasma_core_inst.mesh = _orb_sphere_mesh
+			_plasma_core_inst.material_override = _mat_boss_core
+			_plasma_core_inst.scale = Vector3.ONE * 2.8
+			_visual_root.add_child(_plasma_core_inst)
+
+			_ring_inst = MeshInstance3D.new()
+			_ring_inst.mesh = _orb_ring_mesh
+			_ring_inst.material_override = _mat_enemy_neon
+			_ring_inst.scale = Vector3.ONE * 4.2
+			_visual_root.add_child(_ring_inst)
 
 
 func is_meteor() -> bool:
@@ -824,7 +1074,7 @@ func apply_damage(amount: float) -> bool:
 		_rock_mesh_inst.material_override = _mat_hit_flash
 	if kind == Kind.ENEMY_BOSS_3D and not boss_enraged and hp > 0.0 and hp <= max_hp * 0.45:
 		boss_enraged = true
-		fire_interval = 0.92
+		fire_interval = maxf(0.58, fire_interval * 0.68)
 	if hp <= 0.0:
 		is_destroyed = true
 		return true
@@ -865,21 +1115,78 @@ func update_entity(delta: float, speed_mult: float, glider_pos: Vector3, magnet_
 			_visual_root.rotation.z += delta * 2.2
 		return position.z < 16.0
 
-	# Поведение тяжёлого 3D Босса-Дредноута (выходит на боевую дистанцию z = -34 и маневрирует по восьмёрке)
+	# Поведение тяжёлых 3D Боссов (4 уникальных архетипа движения и телеграфирования атак!)
 	if kind == Kind.ENEMY_BOSS_3D:
-		if position.z < -34.0:
-			position.z = minf(-34.0, position.z + velocity.z * speed_mult * delta)
+		var hover_z: float = -38.0 if boss_archetype == BossArchetype.PHANTOM_SNIPER else -34.0
+		if position.z < hover_z:
+			position.z = minf(hover_z, position.z + velocity.z * speed_mult * delta)
+
 		var spd: float = 1.65 if boss_enraged else 1.05
-		position.x = sin(age * spd) * 4.8
-		position.y = 1.1 + sin(age * spd * 1.7) * 2.2
+		match boss_archetype:
+			BossArchetype.PHANTOM_SNIPER:
+				_boss_dash_timer -= delta
+				if _boss_dash_timer <= 0.0:
+					_boss_dash_timer = 1.65 if boss_enraged else 2.35
+					var next_sign: float = -1.0 if position.x >= 0.0 else 1.0
+					_boss_dash_target = Vector2(next_sign * randf_range(3.0, 5.4), randf_range(-1.0, 2.8))
+				var prev_x: float = position.x
+				position.x = lerpf(position.x, _boss_dash_target.x, clampf(delta * (5.2 if boss_enraged else 3.6), 0.0, 1.0))
+				position.y = lerpf(position.y, _boss_dash_target.y, clampf(delta * 3.4, 0.0, 1.0))
+				if _visual_root != null:
+					_visual_root.rotation.z = clampf(-(position.x - prev_x) * 4.5, -0.45, 0.45)
+
+				# 2 (или 3 в Ярости) лазерных прицела Босса-Снайпера с фиксацией за 0.24с до залпа!
+				var beam_count: int = 3 if boss_enraged else 2
+				var show_sights: bool = position.z >= -44.0 and fire_cooldown > 0.0 and fire_cooldown <= 0.95
+				if show_sights:
+					while boss_aim_points.size() < beam_count:
+						boss_aim_points.append(glider_pos)
+					if boss_aim_points.size() > beam_count:
+						boss_aim_points.resize(beam_count)
+				var pulse_w: float = 2.05 if (fire_cooldown < 0.26 and int(age * 36.0) % 2 == 0) else 1.15
+				for b_i: int in range(_boss_sight_insts.size()):
+					var s_inst: MeshInstance3D = _boss_sight_insts[b_i]
+					var active_b: bool = show_sights and b_i < beam_count
+					s_inst.visible = active_b
+					if active_b:
+						var fan_off: float = (float(b_i) - float(beam_count - 1) * 0.5) * 2.5
+						var desired_pt: Vector3 = glider_pos + Vector3(fan_off, sin(float(b_i) * 2.1 + age) * 0.45, 0.0)
+						if fire_cooldown > 0.24:
+							boss_aim_points[b_i] = boss_aim_points[b_i].lerp(desired_pt, clampf(delta * 9.5, 0.0, 1.0))
+						var muzzle_off_x: float = (float(b_i) - float(beam_count - 1) * 0.5) * 1.65
+						var muzzle_w: Vector3 = global_position + Vector3(muzzle_off_x, 0.1, 1.8)
+						FxManager3D.orient_cylinder_between(s_inst, muzzle_w, boss_aim_points[b_i], pulse_w, 0.5)
+
+			BossArchetype.SWARM_CARRIER:
+				position.x = sin(age * spd * 0.72) * 5.2
+				position.y = 1.35 + cos(age * spd * 0.95) * 1.55
+				if _visual_root != null:
+					_visual_root.rotation.z = -cos(age * spd * 0.72) * 0.12
+				if not _boss_aux_nodes.is_empty():
+					_boss_aux_nodes[0].rotation.z -= delta * (2.8 if boss_enraged else 1.45)
+
+			BossArchetype.OMEGA_DREADNOUGHT:
+				position.x = sin(age * spd * 0.85) * 4.3
+				position.y = 1.05 + sin(age * spd * 1.35) * 1.85
+				if _visual_root != null:
+					_visual_root.rotation.z = -cos(age * spd * 0.85) * 0.15
+				if not _boss_aux_nodes.is_empty():
+					_boss_aux_nodes[0].rotation.y += delta * (3.6 if boss_enraged else 2.1)
+					_boss_aux_nodes[0].rotation.z -= delta * (2.4 if boss_enraged else 1.3)
+
+			_:
+				position.x = sin(age * spd) * 4.8
+				position.y = 1.1 + sin(age * spd * 1.7) * 2.2
+				if _visual_root != null:
+					_visual_root.rotation.z = -cos(age * spd) * 0.18
+
 		if _ring_inst != null:
 			_ring_inst.rotation.z += delta * (3.8 if boss_enraged else 1.9)
 			_ring_inst.rotation.x = sin(age * 2.0) * 0.55
 		if _plasma_core_inst != null:
-			var tele: float = 3.55 if fire_cooldown < 0.35 else 2.8
+			var base_core: float = 3.1 if boss_archetype == BossArchetype.OMEGA_DREADNOUGHT else (2.4 if boss_archetype == BossArchetype.PHANTOM_SNIPER else 2.8)
+			var tele: float = base_core * (1.28 if fire_cooldown < 0.35 else 1.0)
 			_plasma_core_inst.scale = Vector3.ONE * tele
-		if _visual_root != null:
-			_visual_root.rotation.z = -cos(age * spd) * 0.18
 		return true
 
 	# Поведение Элитного 3D Снайпера-Фантома (зависает на рубеже z = -44 на 5.5 сек, наводит 3D лазерный прицел и бьёт плазменным копьём)

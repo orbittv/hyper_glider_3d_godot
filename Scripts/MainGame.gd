@@ -554,7 +554,7 @@ func _update_menu_demo_3d(delta: float) -> void:
 	_fx3d.update_effects(delta)
 	_update_camera_3d(delta, false, false)
 
-	# Едва заметное «дыхание» свечения рамки и внешнего ореола кнопки «ВЗЛЁТ В 3D-КОСМОС»
+	# Едва заметное «дыхание» свечения рамки и внешнего ореола кнопки «В ПОЛЁТ!»
 	if _btn_start_launch != null:
 		var breath: float = 0.5 + 0.5 * sin(t * 2.2)
 		var sb := _btn_start_launch.get_theme_stylebox("normal") as StyleBoxFlat
@@ -1080,7 +1080,17 @@ func _on_meteor_destroyed(ent: SpaceEntity3D) -> void:
 		exp_col = Color(0.22, 1.0, 0.55)
 	elif ent.kind == SpaceEntity3D.Kind.METEOR_PLASMA_GOLD:
 		exp_col = Color(1.0, 0.72, 0.18)
-	elif is_boss or is_interceptor:
+	elif is_boss:
+		match ent.boss_archetype:
+			SpaceEntity3D.BossArchetype.PHANTOM_SNIPER:
+				exp_col = Color(0.84, 0.30, 1.0)
+			SpaceEntity3D.BossArchetype.SWARM_CARRIER:
+				exp_col = Color(0.24, 1.0, 0.66)
+			SpaceEntity3D.BossArchetype.OMEGA_DREADNOUGHT:
+				exp_col = Color(1.0, 0.76, 0.22)
+			_:
+				exp_col = Color(1.0, 0.28, 0.52)
+	elif is_interceptor:
 		exp_col = Color(1.0, 0.28, 0.52)
 
 	if is_boss and _active_boss == ent:
@@ -1285,11 +1295,79 @@ func _fire_enemy_weapons_3d(ent: SpaceEntity3D) -> void:
 		ent.sniper_aim_pos = Vector3.ZERO
 	elif ent.kind == SpaceEntity3D.Kind.ENEMY_BOSS_3D:
 		ent.attack_counter += 1
-		var fan_count: int = 5 if ent.boss_enraged else 3
-		for i: int in range(fan_count):
-			var spread: float = (float(i) - float(fan_count - 1) * 0.5) * 0.14
-			var dir := Vector3(to_player.x + spread, to_player.y + (ent.attack_counter % 2 - 0.5) * 0.06, to_player.z).normalized()
-			_spawn_projectile(WeaponProjectile3D.Kind.ENEMY_PLASMA_BOLT, start_pos + Vector3(spread * 6.0, 0.0, 0.0), dir * 60.0)
+		match ent.boss_archetype:
+			SpaceEntity3D.BossArchetype.PHANTOM_SNIPER:
+				# 2 (в Ярости 3) сверхбыстрых снайперских копья точно по точкам 3D лазерных прицелов
+				var beam_cnt: int = 3 if ent.boss_enraged else 2
+				for i: int in range(beam_cnt):
+					var muzzle_off_x: float = (float(i) - float(beam_cnt - 1) * 0.5) * 1.65
+					var m_pos: Vector3 = start_pos + Vector3(muzzle_off_x, 0.1, 0.0)
+					var aim_pt: Vector3 = ent.boss_aim_points[i] if i < ent.boss_aim_points.size() else g_pos
+					var dir_s: Vector3 = (aim_pt - m_pos).normalized()
+					if dir_s.z < 0.35:
+						dir_s.z = 0.35
+						dir_s = dir_s.normalized()
+					_spawn_projectile(WeaponProjectile3D.Kind.ENEMY_PLASMA_BOLT, m_pos, dir_s * 82.0)
+				ent.boss_aim_points.clear()
+
+			SpaceEntity3D.BossArchetype.SWARM_CARRIER:
+				# Чередует выпуск звена 3D-дронов-перехватчиков (до 4 активных) и парные залпы турелей
+				var spawn_cadence: int = 2 if ent.boss_enraged else 3
+				var active_minions: int = 0
+				for n: Node in _entities_root.get_children():
+					var se := n as SpaceEntity3D
+					if se != null and se.kind == SpaceEntity3D.Kind.ENEMY_INTERCEPTOR and not se.is_destroyed and not se.is_queued_for_deletion():
+						active_minions += 1
+				if ent.attack_counter % spawn_cadence == 0 and active_minions < 4:
+					var drone_cnt: int = mini(3 if ent.boss_enraged else 2, 4 - active_minions)
+					for d_i: int in range(drone_cnt):
+						var side_x: float = (float(d_i) - float(drone_cnt - 1) * 0.5) * 4.2
+						var spawn_p: Vector3 = ent.global_position + Vector3(side_x, -0.2, 2.2)
+						var minion := SpaceEntity3D.new()
+						_entities_root.add_child(minion)
+						minion.setup_entity(SpaceEntity3D.Kind.ENEMY_INTERCEPTOR, spawn_p, _base_forward_speed * 0.82, 1.45, _wave)
+						minion.max_hp *= 0.65
+						minion.hp = minion.max_hp
+						_fx3d.spawn_engine_wake_ring(spawn_p, Color(0.24, 1.0, 0.68))
+				else:
+					var shots: int = 4 if ent.boss_enraged else 2
+					for i: int in range(shots):
+						var sx: float = -3.4 if i % 2 == 0 else 3.4
+						var sy: float = -0.35 if i < 2 else 0.55
+						var m_pos: Vector3 = start_pos + Vector3(sx, sy, 0.0)
+						var dir_c: Vector3 = (g_pos - m_pos).normalized()
+						if dir_c.z < 0.30:
+							dir_c.z = 0.60
+							dir_c = dir_c.normalized()
+						_spawn_projectile(WeaponProjectile3D.Kind.ENEMY_PLASMA_BOLT, m_pos, dir_c * 58.0)
+
+			SpaceEntity3D.BossArchetype.OMEGA_DREADNOUGHT:
+				if ent.attack_counter % 2 == 1:
+					# Спиральный 3D bullet-hell (4..6 снарядов по вращающемуся кольцу!)
+					var spokes: int = 6 if ent.boss_enraged else 4
+					var base_ang: float = float(ent.attack_counter) * 0.62
+					for i: int in range(spokes):
+						var ang: float = base_ang + (float(i) / float(spokes)) * TAU
+						var dir_o := Vector3(cos(ang) * 0.24 + to_player.x * 0.45, sin(ang) * 0.20 + to_player.y * 0.45, maxf(0.68, to_player.z)).normalized()
+						_spawn_projectile(WeaponProjectile3D.Kind.ENEMY_PLASMA_BOLT, start_pos + Vector3(cos(ang) * 2.4, sin(ang) * 1.8, 0.0), dir_o * 56.0)
+				else:
+					# Развёртывающаяся стена с просветом (вынуждает манёвр или 360°-Бочку с рикошетом!)
+					var wall_cnt: int = 7 if ent.boss_enraged else 5
+					var gap_idx: int = posmod(ent.attack_counter, wall_cnt)
+					for i: int in range(wall_cnt):
+						if i == gap_idx:
+							continue
+						var t_w: float = (float(i) - float(wall_cnt - 1) * 0.5) * 0.13
+						var dir_w := Vector3(t_w, to_player.y * 0.72 + t_w * (0.35 if ent.attack_counter % 4 == 0 else -0.35), maxf(0.70, to_player.z)).normalized()
+						_spawn_projectile(WeaponProjectile3D.Kind.ENEMY_PLASMA_BOLT, start_pos + Vector3(t_w * 9.0, 0.0, 0.0), dir_w * 62.0)
+
+			_:
+				# TITAN_CRUISER: классический веер 3..5 снарядов + чередующаяся дуга
+				var fan_count: int = 5 if ent.boss_enraged else 3
+				for i: int in range(fan_count):
+					var spread: float = (float(i) - float(fan_count - 1) * 0.5) * 0.14
+					var dir := Vector3(to_player.x + spread, to_player.y + (ent.attack_counter % 2 - 0.5) * 0.06, to_player.z).normalized()
+					_spawn_projectile(WeaponProjectile3D.Kind.ENEMY_PLASMA_BOLT, start_pos + Vector3(spread * 6.0, 0.0, 0.0), dir * 60.0)
 
 
 func _collect_orb(ent: SpaceEntity3D) -> void:
@@ -2332,7 +2410,7 @@ func _build_menu_overlay() -> void:
 	)
 	wave_hbox.add_child(_btn_wave_next)
 
-	_btn_start_launch = UiBuilder.create_launch_hero_button("ВЗЛЁТ В 3D-КОСМОС", 64.0, 22)
+	_btn_start_launch = UiBuilder.create_launch_hero_button("В ПОЛЁТ!", 64.0, 24)
 	_btn_start_launch.pressed.connect(_start_new_run)
 	vbox.add_child(_btn_start_launch)
 
