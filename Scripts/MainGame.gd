@@ -145,6 +145,8 @@ var _lbl_gameover_stats: Label
 var _hangar_overlay: Control
 var _lbl_hangar_credits: Label
 var _hangar_rows: Array[Dictionary] = []
+var _overclock_row: Dictionary = {}
+var _hull_rows: Array[Dictionary] = []
 var _settings_overlay: Control
 var _toast_panel: PanelContainer
 var _toast_label: Label
@@ -201,6 +203,8 @@ func _ready() -> void:
 
 	_glider = Glider3DController.new()
 	add_child(_glider)
+	_glider.apply_hull_skin(_config.selected_hull, _config.get_hull_barrel_roll_cd_mult())
+	_glider.set_drones_active(_config.upg_wing_drones > 0)
 
 	_setup_camera_3d()
 	_director = SpawnDirector3D.new()
@@ -244,6 +248,12 @@ func _award_crystals(amount: int, save_now: bool = false) -> void:
 	_config.add_crystals(amount, save_now)
 	if not save_now:
 		_crystals_dirty_save = true
+
+
+func _scale_score(raw_pts: int) -> int:
+	if _config == null:
+		return raw_pts
+	return int(round(float(raw_pts) * _config.get_overclock_score_multiplier()))
 
 
 func _bank_uncommitted_credits() -> void:
@@ -621,7 +631,7 @@ func _update_gameplay_3d(delta: float) -> void:
 	_glider.update_glider(
 		delta,
 		key_vec,
-		_config.glider_responsiveness,
+		_config.glider_responsiveness * _config.get_hull_responsiveness_mult(),
 		is_hyper,
 		is_tunnel,
 		is_overdrive,
@@ -724,8 +734,9 @@ func _update_camera_3d(delta: float, is_hyper: bool, is_tunnel: bool) -> void:
 
 
 func _update_weapons_3d(delta: float, is_overdrive: bool, is_tunnel: bool) -> void:
-	var fire_rate_mult: float = _config.get_plasma_fire_rate_multiplier() * (1.25 if is_overdrive else 1.0)
+	var fire_rate_mult: float = _config.get_plasma_fire_rate_multiplier() * _config.get_hull_fire_rate_mult() * (1.25 if is_overdrive else 1.0)
 	var dmg_bonus: float = _config.get_plasma_damage_bonus()
+	var oc_dmg_mult: float = _config.get_overclock_damage_multiplier()
 
 	# В бонусном 3D Гипер-туннеле нет врагов и метеоритов — автоматика переходит в мирный режим,
 	# а таймеры собранного спецоружия ставятся на паузу и не сгорают впустую!
@@ -810,7 +821,7 @@ func _update_weapons_3d(delta: float, is_overdrive: bool, is_tunnel: bool) -> vo
 		if laser_target != null:
 			_glider.show_quantum_laser(laser_target.global_position, is_overdrive)
 			_audio.play_laser_hum()
-			var laser_dps: float = (95.0 + dmg_bonus * 2.2) * fire_rate_mult
+			var laser_dps: float = (95.0 + dmg_bonus * 2.2) * fire_rate_mult * oc_dmg_mult * _config.get_hull_special_damage_mult()
 			if randf() < 0.35:
 				_fx3d.spawn_hit_spark(laser_target.global_position, Color(1.0, 0.45, 0.96) if is_overdrive else Color(0.25, 0.96, 1.0))
 			if is_overdrive:
@@ -864,7 +875,7 @@ func _update_weapons_3d(delta: float, is_overdrive: bool, is_tunnel: bool) -> vo
 						Vector3(0.0, 0.0, -115.0),
 						0.0
 					)
-					dp.damage = 10.0 + float(_config.upg_wing_drones) * 1.5 + dmg_bonus * 0.25
+					dp.damage = (10.0 + float(_config.upg_wing_drones) * 1.5 + dmg_bonus * 0.25) * oc_dmg_mult
 
 
 func _spawn_projectile(
@@ -884,6 +895,13 @@ func _spawn_projectile(
 		proj = WeaponProjectile3D.new()
 		_projectiles_root.add_child(proj)
 	proj.setup_projectile(p_kind, start_pos, init_vel, dmg_bonus, homing_target)
+	if not proj.is_enemy and _config != null:
+		var dmg_m: float = _config.get_overclock_damage_multiplier()
+		if p_kind == WeaponProjectile3D.Kind.HOMING_MISSILE:
+			dmg_m *= _config.get_hull_special_damage_mult()
+		proj.damage *= dmg_m
+		if proj.splash_radius > 0.0:
+			proj.splash_radius *= _config.get_hull_blast_radius_mult()
 	_active_projectiles.append(proj)
 	return proj
 
@@ -1071,7 +1089,7 @@ func _on_meteor_destroyed(ent: SpaceEntity3D) -> void:
 	var is_interceptor: bool = ent.kind == SpaceEntity3D.Kind.ENEMY_INTERCEPTOR or is_sniper
 	_stat_destroyed += 1
 
-	var pts: int = ent.score_value * _combo
+	var pts: int = _scale_score(ent.score_value * _combo)
 	_score += pts
 	_add_hyper_charge(25.0 if is_boss else (8.0 if is_interceptor else (6.5 if is_bomb else 3.5)))
 
@@ -1118,7 +1136,7 @@ func _on_meteor_destroyed(ent: SpaceEntity3D) -> void:
 		_cam_shake = maxf(_cam_shake, 0.65)
 		_spawn_floating_3d_text(pos, "+%d ПЛАЗМА-ВЗРЫВ!" % pts, exp_col)
 		# Цепная детонация соседних метеоритов и врагов!
-		var blast_r: float = 8.5 if ent.kind == SpaceEntity3D.Kind.METEOR_PLASMA_GOLD else 6.8
+		var blast_r: float = (8.5 if ent.kind == SpaceEntity3D.Kind.METEOR_PLASMA_GOLD else 6.8) * _config.get_hull_blast_radius_mult()
 		var blast_dmg: float = 95.0 if ent.kind == SpaceEntity3D.Kind.METEOR_PLASMA_GOLD else 70.0
 		for other_node: Node in _entities_root.get_children():
 			var other := other_node as SpaceEntity3D
@@ -1206,7 +1224,7 @@ func _update_entities_3d(delta: float, speed_mult: float, is_invulnerable_warp: 
 				_combo = mini(_combo + 1, 8)
 				_max_combo_reached = maxi(_max_combo_reached, _combo)
 				_combo_timer = 4.5
-				var ring_pts: int = 180 * _combo
+				var ring_pts: int = _scale_score(180 * _combo)
 				_score += ring_pts
 				_award_crystals(1, false)
 				_add_hyper_charge(12.0)
@@ -1247,7 +1265,7 @@ func _trigger_graze_bonus(threat_pos: Vector3) -> void:
 	_max_combo_reached = maxi(_max_combo_reached, _combo)
 	_stat_grazes += 1
 	_combo_timer = 4.5
-	var graze_pts: int = 45 * _combo
+	var graze_pts: int = _scale_score(45 * _combo)
 	_score += graze_pts
 	_add_hyper_charge(5.5)
 	_audio.play_graze(_combo)
@@ -1378,13 +1396,13 @@ func _collect_orb(ent: SpaceEntity3D) -> void:
 		SpaceEntity3D.Kind.ORB_ENERGY:
 			_combo = mini(_combo + 1, 8)
 			_combo_timer = 4.5
-			var pts: int = 85 * _combo
+			var pts: int = _scale_score(85 * _combo)
 			_score += pts
 			_add_hyper_charge(9.0)
 			_audio.play_orb_pickup(false, _combo)
 			_spawn_floating_3d_text(pos, "+%d ЭНЕРГИЯ" % pts, Color(0.25, 0.95, 1.0))
 		SpaceEntity3D.Kind.ORB_HYPER_CORE:
-			_score += 220 * _combo
+			_score += _scale_score(220 * _combo)
 			_add_hyper_charge(28.0)
 			_audio.play_orb_pickup(true, _combo)
 			_spawn_floating_3d_text(pos, "+28% ГИПЕР-ЯДРО!", Color(0.96, 0.35, 1.0))
@@ -1501,7 +1519,7 @@ func _exit_hyper_tunnel() -> void:
 func _add_hyper_charge(amount: float) -> void:
 	if _hyper_timer > 0.0 or _tunnel_timer > 0.0:
 		return
-	var mult: float = 1.0 + float(_config.upg_hyper_core) * 0.12
+	var mult: float = (1.0 + float(_config.upg_hyper_core) * 0.12) * _config.get_hull_hyper_charge_mult()
 	_hyper_charge = clampf(_hyper_charge + amount * mult, 0.0, 100.0)
 
 
@@ -1658,6 +1676,7 @@ func _enter_menu_state() -> void:
 	_state = GameState.MENU
 	_clear_world_entities()
 	_glider.reset_glider()
+	_glider.apply_hull_skin(_config.selected_hull, _config.get_hull_barrel_roll_cd_mult())
 	_glider.set_drones_active(_config.upg_wing_drones > 0)
 	_audio.set_hyper_mode(false)
 	_audio.set_tunnel_mode(false)
@@ -1672,6 +1691,7 @@ func _start_new_run() -> void:
 	_audio.play_ui_click()
 	_clear_world_entities()
 	_glider.reset_glider()
+	_glider.apply_hull_skin(_config.selected_hull, _config.get_hull_barrel_roll_cd_mult())
 	_glider.set_drones_active(_config.upg_wing_drones > 0)
 	_reset_hud_cache()
 
@@ -2032,9 +2052,9 @@ func _build_hud_ui() -> void:
 	shield_row.add_child(_lbl_shields)
 
 	_shield_dots.clear()
-	for i: int in range(5):
+	for i: int in range(6):
 		var dot := ColorRect.new()
-		dot.custom_minimum_size = Vector2(13.0, 11.0)
+		dot.custom_minimum_size = Vector2(11.0, 11.0)
 		dot.color = Color(0.22, 0.96, 0.76, 1.0)
 		shield_row.add_child(dot)
 		_shield_dots.append(dot)
@@ -2534,15 +2554,25 @@ func _build_hangar_overlay() -> void:
 	)
 	_hangar_overlay = modal["root"]
 	_modal_cards.append({"card": modal["card"], "margin_x": 18.0, "card_h": 760.0})
-	var vbox: VBoxContainer = modal["vbox"]
+	var card_vbox: VBoxContainer = modal["vbox"]
 
-	vbox.add_child(UiBuilder.create_label("АНГАР 3D-АПГРЕЙДОВ", 23, Color(0.38, 0.96, 1.0), HORIZONTAL_ALIGNMENT_CENTER, 3))
+	card_vbox.add_child(UiBuilder.create_label("АНГАР 3D-АПГРЕЙДОВ", 23, Color(0.38, 0.96, 1.0), HORIZONTAL_ALIGNMENT_CENTER, 3))
 
 	_lbl_hangar_credits = UiBuilder.create_label("КРИСТАЛЛЫ: 25 КР", 17, Color(1.0, 0.86, 0.30), HORIZONTAL_ALIGNMENT_CENTER)
-	vbox.add_child(_lbl_hangar_credits)
+	card_vbox.add_child(_lbl_hangar_credits)
+
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	card_vbox.add_child(scroll)
+
+	var vbox := VBoxContainer.new()
+	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.add_theme_constant_override("separation", 8)
+	scroll.add_child(vbox)
 
 	var upg_defs: Array[Dictionary] = [
-		{"key": "wave_shield", "title": "3D ГРАВИ-ЩИТ", "desc": "До 5 щитов + взрывная волна при ударе"},
+		{"key": "wave_shield", "title": "3D ГРАВИ-ЩИТ", "desc": "До 5 щитов (+1 с Титаном) + ударная волна"},
 		{"key": "plasma_cannon", "title": "ПЛАЗМЕННЫЙ УСИЛИТЕЛЬ", "desc": "+Темп стрельбы и урон плазменных пушек"},
 		{"key": "ammo_bay", "title": "ОРУЖЕЙНЫЙ ОТСЕК", "desc": "+20%..+100% к времени спецоружия и ракетам"},
 		{"key": "wing_drones", "title": "КРЫЛЬЕВЫЕ 3D-ДРОНЫ", "desc": "Два 3D-дрона ведут огонь плазмой по курсу"},
@@ -2594,6 +2624,7 @@ func _build_hangar_overlay() -> void:
 			if _config.buy_upgrade(key_str):
 				_audio.play_weapon_pickup()
 				_glider.set_drones_active(_config.upg_wing_drones > 0)
+				_max_shields = _config.get_max_shields()
 				_refresh_hangar_ui()
 				_refresh_menu_ui()
 			else:
@@ -2609,22 +2640,97 @@ func _build_hangar_overlay() -> void:
 			"pips": level_pips
 		})
 
-	var btn_refund := UiBuilder.create_danger_button("СБРОСИТЬ И ВЕРНУТЬ КРИСТАЛЛЫ", 46.0, 15)
+	# Бесконечный эндгейм-блок: ОВЕРКЛОК РЕАКТОРА (открывается после 5/5 всех 5 систем)
+	var oc_card := UiBuilder.create_glass_panel(
+		Color(0.09, 0.04, 0.16, 0.94),
+		Color(1.0, 0.78, 0.24, 0.72),
+		12,
+		10.0,
+		8.0
+	)
+	vbox.add_child(oc_card)
+	var oc_hbox := HBoxContainer.new()
+	oc_hbox.add_theme_constant_override("separation", 8)
+	oc_card.add_child(oc_hbox)
+	var oc_info := VBoxContainer.new()
+	oc_info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	oc_hbox.add_child(oc_info)
+	var oc_title := UiBuilder.create_label("ОВЕРКЛОК РЕАКТОРА", 15, Color(1.0, 0.86, 0.32), HORIZONTAL_ALIGNMENT_LEFT)
+	oc_info.add_child(oc_title)
+	var oc_desc := UiBuilder.create_label("+6% урон и +8% очки за каждый уровень (∞)", 12, Color(0.88, 0.82, 1.0), HORIZONTAL_ALIGNMENT_LEFT)
+	oc_desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	oc_info.add_child(oc_desc)
+	var oc_btn := UiBuilder.create_primary_button("5/5 СИСТЕМ", 44.0, 13)
+	oc_btn.custom_minimum_size = Vector2(132.0, 44.0)
+	oc_btn.pressed.connect(func() -> void:
+		if _config.buy_overclock():
+			_audio.play_weapon_pickup()
+			_refresh_hangar_ui()
+			_refresh_menu_ui()
+		else:
+			_audio.play_ui_click()
+	)
+	oc_hbox.add_child(oc_btn)
+	_overclock_row = {"lbl_title": oc_title, "lbl_desc": oc_desc, "btn_buy": oc_btn}
+
+	# Секция выбора и покупки 4 уникальных 3D-корпусов глайдера с боевыми перками
+	vbox.add_child(UiBuilder.create_label("3D-КОРПУСА ГЛАЙДЕРА (СКИН + ПЕРК)", 15, Color(0.38, 0.96, 1.0), HORIZONTAL_ALIGNMENT_CENTER, 2))
+	_hull_rows.clear()
+	for h_def: Dictionary in GameConfig.HULL_DEFS:
+		var h_id: int = int(h_def["id"])
+		var h_card := UiBuilder.create_glass_panel(
+			Color(0.03, 0.08, 0.17, 0.92),
+			Color(0.32, 0.72, 0.96, 0.55),
+			12,
+			10.0,
+			8.0
+		)
+		vbox.add_child(h_card)
+		var h_hbox := HBoxContainer.new()
+		h_hbox.add_theme_constant_override("separation", 8)
+		h_card.add_child(h_hbox)
+		var h_info := VBoxContainer.new()
+		h_info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		h_hbox.add_child(h_info)
+		var h_title := UiBuilder.create_label(String(h_def["name"]), 15, Color(0.92, 0.98, 1.0), HORIZONTAL_ALIGNMENT_LEFT)
+		h_info.add_child(h_title)
+		var h_desc := UiBuilder.create_label(String(h_def["desc"]), 12, Color(0.68, 0.86, 0.98), HORIZONTAL_ALIGNMENT_LEFT)
+		h_desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		h_info.add_child(h_desc)
+		var h_btn := UiBuilder.create_primary_button("ВЫБРАТЬ", 44.0, 13)
+		h_btn.custom_minimum_size = Vector2(132.0, 44.0)
+		h_btn.pressed.connect(func() -> void:
+			if _config.buy_or_select_hull(h_id):
+				_audio.play_weapon_pickup()
+				_glider.apply_hull_skin(_config.selected_hull, _config.get_hull_barrel_roll_cd_mult())
+				_max_shields = _config.get_max_shields()
+				_shields = mini(_shields, _max_shields)
+				_refresh_hangar_ui()
+				_refresh_menu_ui()
+			else:
+				_audio.play_ui_click()
+		)
+		h_hbox.add_child(h_btn)
+		_hull_rows.append({"id": h_id, "name": String(h_def["name"]), "lbl_title": h_title, "btn": h_btn})
+
+	var btn_refund := UiBuilder.create_danger_button("СБРОСИТЬ АПГРЕЙДЫ И ВЕРНУТЬ КР", 44.0, 14)
 	btn_refund.pressed.connect(func() -> void:
 		_audio.play_ui_click()
 		_config.refund_all_upgrades()
 		_glider.set_drones_active(false)
+		_max_shields = _config.get_max_shields()
+		_shields = mini(_shields, _max_shields)
 		_refresh_hangar_ui()
 		_refresh_menu_ui()
 	)
-	vbox.add_child(btn_refund)
+	card_vbox.add_child(btn_refund)
 
-	var btn_close := UiBuilder.create_secondary_button("ЗАКРЫТЬ АНГАР", 50.0, 17)
+	var btn_close := UiBuilder.create_secondary_button("ЗАКРЫТЬ АНГАР", 48.0, 17)
 	btn_close.pressed.connect(func() -> void:
 		_audio.play_ui_click()
 		_hangar_overlay.visible = false
 	)
-	vbox.add_child(btn_close)
+	card_vbox.add_child(btn_close)
 
 
 func _refresh_hangar_ui() -> void:
@@ -2653,6 +2759,45 @@ func _refresh_hangar_ui() -> void:
 				UiBuilder.apply_button_colors(btn_b, Color(0.05, 0.45, 0.68, 0.98), Color(0.38, 0.95, 1.0, 1.0))
 			else:
 				UiBuilder.apply_button_colors(btn_b, Color(0.06, 0.10, 0.18, 0.85), Color(0.24, 0.42, 0.56, 0.45))
+
+	if not _overclock_row.is_empty():
+		var oc_t := _overclock_row["lbl_title"] as Label
+		var oc_d := _overclock_row["lbl_desc"] as Label
+		var oc_b := _overclock_row["btn_buy"] as Button
+		var oc_lvl: int = _config.upg_overclock
+		oc_t.text = "ОВЕРКЛОК РЕАКТОРА [УР. %d]" % oc_lvl
+		if not _config.is_all_base_maxed():
+			oc_d.text = "Откроется после прокачки всех 5 систем до 5/5"
+			oc_b.text = "НУЖНО 5/5"
+			UiBuilder.apply_button_colors(oc_b, Color(0.08, 0.08, 0.14, 0.85), Color(0.45, 0.38, 0.56, 0.45))
+		else:
+			var dmg_pct: int = oc_lvl * 6
+			var pts_pct: int = oc_lvl * 8
+			oc_d.text = "Бонус: +%d%% урон, +%d%% очки (след.: +6%% / +8%%)" % [dmg_pct, pts_pct]
+			oc_b.text = "+1 (%d КР)" % _config.get_overclock_cost()
+			if _config.can_buy_overclock():
+				UiBuilder.apply_button_colors(oc_b, Color(0.56, 0.32, 0.06, 0.98), Color(1.0, 0.84, 0.28, 1.0))
+			else:
+				UiBuilder.apply_button_colors(oc_b, Color(0.10, 0.08, 0.16, 0.85), Color(0.52, 0.42, 0.24, 0.45))
+
+	for h_row: Dictionary in _hull_rows:
+		var h_id: int = int(h_row["id"])
+		var h_b := h_row["btn"] as Button
+		var is_sel: bool = _config.selected_hull == h_id
+		var is_open: bool = _config.is_hull_unlocked(h_id)
+		if is_sel:
+			h_b.text = "АКТИВЕН"
+			UiBuilder.apply_button_colors(h_b, Color(0.06, 0.38, 0.28, 0.94), Color(0.28, 1.0, 0.74, 0.96))
+		elif is_open:
+			h_b.text = "ВЫБРАТЬ"
+			UiBuilder.apply_button_colors(h_b, Color(0.06, 0.32, 0.56, 0.95), Color(0.38, 0.90, 1.0, 0.95))
+		else:
+			var h_cost: int = _config.get_hull_cost(h_id)
+			h_b.text = "%d КР" % h_cost
+			if _config.quantum_crystals >= h_cost:
+				UiBuilder.apply_button_colors(h_b, Color(0.42, 0.16, 0.58, 0.98), Color(0.88, 0.42, 1.0, 1.0))
+			else:
+				UiBuilder.apply_button_colors(h_b, Color(0.06, 0.10, 0.18, 0.85), Color(0.24, 0.42, 0.56, 0.45))
 
 
 func _build_settings_overlay() -> void:

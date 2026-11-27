@@ -8,8 +8,37 @@ extends RefCounted
 const SAVE_PATH: String = "user://hyper_glider_3d_save.cfg"
 const MAX_UPGRADE_LEVEL: int = 5
 const UPGRADE_COSTS: Array[int] = [40, 100, 220, 420, 750]
+const OVERCLOCK_BASE_COST: int = 800
+const OVERCLOCK_STEP_COST: int = 350
 const SCORE_PER_BONUS_CRYSTAL: int = 1000
 const DEFAULT_STARTING_CRYSTALS: int = 25
+
+const HULL_DEFS: Array[Dictionary] = [
+	{
+		"id": 0,
+		"name": "КВАНТ-СТРАЖ",
+		"cost": 0,
+		"desc": "Сбалансированный базовый 3D-глайдер"
+	},
+	{
+		"id": 1,
+		"name": "АПЕКС-ПЕРЕХВАТЧИК",
+		"cost": 350,
+		"desc": "+15% манёвр и огонь, -25% откат 360°-Бочки"
+	},
+	{
+		"id": 2,
+		"name": "КРЕЙСЕР ТИТАН",
+		"cost": 650,
+		"desc": "+1 макс. щит (до 6) и +20% радиус взрывов"
+	},
+	{
+		"id": 3,
+		"name": "ФАНТОМ ОМЕГА",
+		"cost": 1100,
+		"desc": "+22% урон Лазера/Ракет и +25% заряд Гипер-Ядра"
+	}
+]
 
 var music_volume: float = 0.85
 var sfx_volume: float = 0.90
@@ -35,6 +64,9 @@ var upg_plasma_cannon: int = 0 # Плазменный Усилитель (+ск�
 var upg_ammo_bay: int = 0 # Оружейный Отсек (+20%..+100% к длительности спецоружия и боезапасу ракет)
 var upg_wing_drones: int = 0 # Крыльевые 3D-Дроны (автоматические плазменные дроны-ведомые слева и справа)
 var upg_hyper_core: int = 0 # Гипер-Реактор и Магнит (+радиус захвата сфер, +заряд ядра, +длительность гипер-туннеля)
+var upg_overclock: int = 0 # Бесконечный эндгейм Оверклок Реактора (+6% урон и +8% очки за уровень)
+var selected_hull: int = 0 # Выбранный 3D-корпус глайдера (0..3)
+var unlocked_hulls: Array[int] = [0]
 
 
 func load_data() -> void:
@@ -73,6 +105,23 @@ func load_data() -> void:
 	upg_ammo_bay = clampi(int(cfg.get_value("upgrades", "upg_ammo_bay", 0)), 0, MAX_UPGRADE_LEVEL)
 	upg_wing_drones = clampi(int(cfg.get_value("upgrades", "upg_wing_drones", 0)), 0, MAX_UPGRADE_LEVEL)
 	upg_hyper_core = clampi(int(cfg.get_value("upgrades", "upg_hyper_core", 0)), 0, MAX_UPGRADE_LEVEL)
+	upg_overclock = maxi(0, int(cfg.get_value("upgrades", "upg_overclock", 0)))
+	unlocked_hulls.clear()
+	var saved_hulls_var: Variant = cfg.get_value("upgrades", "unlocked_hulls", PackedInt32Array([0]))
+	if saved_hulls_var is PackedInt32Array:
+		for h_id: int in (saved_hulls_var as PackedInt32Array):
+			if h_id >= 0 and h_id < HULL_DEFS.size() and not unlocked_hulls.has(h_id):
+				unlocked_hulls.append(h_id)
+	elif saved_hulls_var is Array:
+		for item: Variant in (saved_hulls_var as Array):
+			var h_id: int = int(item)
+			if h_id >= 0 and h_id < HULL_DEFS.size() and not unlocked_hulls.has(h_id):
+				unlocked_hulls.append(h_id)
+	if not unlocked_hulls.has(0):
+		unlocked_hulls.append(0)
+	selected_hull = clampi(int(cfg.get_value("upgrades", "selected_hull", 0)), 0, HULL_DEFS.size() - 1)
+	if not unlocked_hulls.has(selected_hull):
+		selected_hull = 0
 
 
 func save_data() -> void:
@@ -100,6 +149,12 @@ func save_data() -> void:
 	cfg.set_value("upgrades", "upg_ammo_bay", upg_ammo_bay)
 	cfg.set_value("upgrades", "upg_wing_drones", upg_wing_drones)
 	cfg.set_value("upgrades", "upg_hyper_core", upg_hyper_core)
+	cfg.set_value("upgrades", "upg_overclock", upg_overclock)
+	cfg.set_value("upgrades", "selected_hull", selected_hull)
+	var hull_pack := PackedInt32Array()
+	for h_id: int in unlocked_hulls:
+		hull_pack.append(h_id)
+	cfg.set_value("upgrades", "unlocked_hulls", hull_pack)
 	cfg.save(SAVE_PATH)
 
 
@@ -171,6 +226,8 @@ func get_total_spent_crystals() -> int:
 		var lvl: int = get_upgrade_level(key)
 		for i: int in range(lvl):
 			total += UPGRADE_COSTS[i]
+	for oc_i: int in range(upg_overclock):
+		total += OVERCLOCK_BASE_COST + oc_i * OVERCLOCK_STEP_COST
 	return total
 
 
@@ -184,8 +241,97 @@ func refund_all_upgrades() -> int:
 	upg_ammo_bay = 0
 	upg_wing_drones = 0
 	upg_hyper_core = 0
+	upg_overclock = 0
 	save_data()
 	return refunded
+
+
+func is_all_base_maxed() -> bool:
+	return (
+		upg_wave_shield >= MAX_UPGRADE_LEVEL
+		and upg_plasma_cannon >= MAX_UPGRADE_LEVEL
+		and upg_ammo_bay >= MAX_UPGRADE_LEVEL
+		and upg_wing_drones >= MAX_UPGRADE_LEVEL
+		and upg_hyper_core >= MAX_UPGRADE_LEVEL
+	)
+
+
+func get_overclock_cost() -> int:
+	return OVERCLOCK_BASE_COST + upg_overclock * OVERCLOCK_STEP_COST
+
+
+func can_buy_overclock() -> bool:
+	return is_all_base_maxed() and quantum_crystals >= get_overclock_cost()
+
+
+func buy_overclock() -> bool:
+	if not can_buy_overclock():
+		return false
+	quantum_crystals = maxi(0, quantum_crystals - get_overclock_cost())
+	upg_overclock += 1
+	save_data()
+	return true
+
+
+func get_overclock_damage_multiplier() -> float:
+	return 1.0 + float(upg_overclock) * 0.06
+
+
+func get_overclock_score_multiplier() -> float:
+	return 1.0 + float(upg_overclock) * 0.08
+
+
+func is_hull_unlocked(hull_id: int) -> bool:
+	return unlocked_hulls.has(hull_id)
+
+
+func get_hull_cost(hull_id: int) -> int:
+	if hull_id < 0 or hull_id >= HULL_DEFS.size():
+		return 0
+	return int(HULL_DEFS[hull_id]["cost"])
+
+
+func buy_or_select_hull(hull_id: int) -> bool:
+	if hull_id < 0 or hull_id >= HULL_DEFS.size():
+		return false
+	if is_hull_unlocked(hull_id):
+		if selected_hull == hull_id:
+			return false
+		selected_hull = hull_id
+		save_data()
+		return true
+	var cost: int = get_hull_cost(hull_id)
+	if quantum_crystals < cost:
+		return false
+	quantum_crystals = maxi(0, quantum_crystals - cost)
+	unlocked_hulls.append(hull_id)
+	selected_hull = hull_id
+	save_data()
+	return true
+
+
+func get_hull_responsiveness_mult() -> float:
+	return 1.15 if selected_hull == 1 else 1.0
+
+
+func get_hull_fire_rate_mult() -> float:
+	return 1.15 if selected_hull == 1 else 1.0
+
+
+func get_hull_barrel_roll_cd_mult() -> float:
+	return 0.75 if selected_hull == 1 else 1.0
+
+
+func get_hull_blast_radius_mult() -> float:
+	return 1.20 if selected_hull == 2 else 1.0
+
+
+func get_hull_special_damage_mult() -> float:
+	return 1.22 if selected_hull == 3 else 1.0
+
+
+func get_hull_hyper_charge_mult() -> float:
+	return 1.25 if selected_hull == 3 else 1.0
 
 
 func get_max_shields() -> int:
@@ -193,6 +339,8 @@ func get_max_shields() -> int:
 	if upg_wave_shield >= 2:
 		extra += 1
 	if upg_wave_shield >= 5:
+		extra += 1
+	if selected_hull == 2:
 		extra += 1
 	return 3 + extra
 

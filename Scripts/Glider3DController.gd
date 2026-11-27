@@ -31,6 +31,14 @@ var _jet_mat: ShaderMaterial
 var _wing_strip_left: MeshInstance3D
 var _wing_strip_right: MeshInstance3D
 var _wing_strip_mat: StandardMaterial3D
+var _mat_hull: StandardMaterial3D
+var _mat_dark_armor: StandardMaterial3D
+var _mat_cockpit: StandardMaterial3D
+var _mat_burner: StandardMaterial3D
+var _hull_neon_color: Color = Color(0.22, 0.95, 1.0)
+var _hull_flame_color: Color = Color(0.12, 0.86, 1.0, 1.0)
+var _hull_tail_color: Color = Color(0.55, 0.18, 0.98, 1.0)
+var _barrel_roll_cd_mult: float = 1.0
 var _wingtip_beacon_left: Node3D
 var _wingtip_beacon_right: Node3D
 
@@ -69,24 +77,27 @@ func _build_glider_3d_model() -> void:
 	_hull_root = Node3D.new()
 	add_child(_hull_root)
 
-	# Материалы корпуса глайдера
-	var mat_hull := StandardMaterial3D.new()
-	mat_hull.albedo_color = Color(0.14, 0.21, 0.35)
-	mat_hull.metallic = 0.78
-	mat_hull.roughness = 0.26
+	# Материалы корпуса глайдера (динамически перекрашиваются при смене 3D-корпуса в Ангаре)
+	_mat_hull = StandardMaterial3D.new()
+	_mat_hull.albedo_color = Color(0.14, 0.21, 0.35)
+	_mat_hull.metallic = 0.78
+	_mat_hull.roughness = 0.26
+	var mat_hull: StandardMaterial3D = _mat_hull
 
-	var mat_dark_armor := StandardMaterial3D.new()
-	mat_dark_armor.albedo_color = Color(0.07, 0.11, 0.20)
-	mat_dark_armor.metallic = 0.85
-	mat_dark_armor.roughness = 0.32
+	_mat_dark_armor = StandardMaterial3D.new()
+	_mat_dark_armor.albedo_color = Color(0.07, 0.11, 0.20)
+	_mat_dark_armor.metallic = 0.85
+	_mat_dark_armor.roughness = 0.32
+	var mat_dark_armor: StandardMaterial3D = _mat_dark_armor
 
-	var mat_cockpit := StandardMaterial3D.new()
-	mat_cockpit.albedo_color = Color(0.15, 0.88, 1.0, 0.92)
-	mat_cockpit.metallic = 0.35
-	mat_cockpit.roughness = 0.10
-	mat_cockpit.emission_enabled = true
-	mat_cockpit.emission = Color(0.12, 0.78, 1.0)
-	mat_cockpit.emission_energy_multiplier = 1.65
+	_mat_cockpit = StandardMaterial3D.new()
+	_mat_cockpit.albedo_color = Color(0.15, 0.88, 1.0, 0.92)
+	_mat_cockpit.metallic = 0.35
+	_mat_cockpit.roughness = 0.10
+	_mat_cockpit.emission_enabled = true
+	_mat_cockpit.emission = Color(0.12, 0.78, 1.0)
+	_mat_cockpit.emission_energy_multiplier = 1.65
+	var mat_cockpit: StandardMaterial3D = _mat_cockpit
 
 	_wing_strip_mat = StandardMaterial3D.new()
 	_wing_strip_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -257,9 +268,10 @@ func _build_glider_3d_model() -> void:
 	burner_torus.outer_radius = 0.21
 	burner_torus.rings = 16
 	burner_torus.ring_segments = 8
-	var mat_burner := StandardMaterial3D.new()
-	mat_burner.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat_burner.albedo_color = Color(0.75, 0.98, 1.0)
+	_mat_burner = StandardMaterial3D.new()
+	_mat_burner.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_mat_burner.albedo_color = Color(0.75, 0.98, 1.0)
+	var mat_burner: StandardMaterial3D = _mat_burner
 
 	for side_n: float in [-0.30, 0.30]:
 		var nozzle := MeshInstance3D.new()
@@ -469,7 +481,7 @@ func trigger_barrel_roll(dir_sign: float = 1.0) -> bool:
 	if _barrel_roll_timer > 0.0 or _barrel_roll_cd > 0.0:
 		return false
 	_barrel_roll_timer = BARREL_ROLL_DURATION
-	_barrel_roll_cd = BARREL_ROLL_COOLDOWN
+	_barrel_roll_cd = BARREL_ROLL_COOLDOWN * _barrel_roll_cd_mult
 	_barrel_roll_dir = -1.0 if dir_sign < 0.0 else 1.0
 	_shield_flash = maxf(_shield_flash, 0.72)
 	move_target_by_delta(Vector2(_barrel_roll_dir * 1.45, 0.0))
@@ -486,6 +498,57 @@ func set_drones_active(active: bool) -> void:
 		_drone_left.visible = active
 	if _drone_right != null:
 		_drone_right.visible = active
+
+
+func apply_hull_skin(hull_id: int, barrel_cd_mult: float = 1.0) -> void:
+	_barrel_roll_cd_mult = clampf(barrel_cd_mult, 0.5, 1.2)
+	var hull_c := Color(0.14, 0.21, 0.35)
+	var dark_c := Color(0.07, 0.11, 0.20)
+	var cock_c := Color(0.15, 0.88, 1.0, 0.92)
+	var neon_c := Color(0.22, 0.95, 1.0)
+	var flame_c := Color(0.12, 0.86, 1.0, 1.0)
+	var tail_c := Color(0.55, 0.18, 0.98, 1.0)
+
+	if hull_id == 1:
+		# АПЕКС-ПЕРЕХВАТЧИК: ало-рубиновый с золотисто-огненным неоном
+		hull_c = Color(0.36, 0.09, 0.14)
+		dark_c = Color(0.16, 0.05, 0.08)
+		cock_c = Color(1.0, 0.72, 0.20, 0.94)
+		neon_c = Color(1.0, 0.42, 0.22)
+		flame_c = Color(1.0, 0.58, 0.16, 1.0)
+		tail_c = Color(1.0, 0.18, 0.32, 1.0)
+	elif hull_id == 2:
+		# КРЕЙСЕР ТИТАН: изумрудно-стальной с золотыми акцентами
+		hull_c = Color(0.12, 0.28, 0.24)
+		dark_c = Color(0.06, 0.14, 0.13)
+		cock_c = Color(0.28, 1.0, 0.72, 0.94)
+		neon_c = Color(0.26, 1.0, 0.66)
+		flame_c = Color(0.22, 1.0, 0.68, 1.0)
+		tail_c = Color(0.96, 0.78, 0.20, 1.0)
+	elif hull_id == 3:
+		# ФАНТОМ ОМЕГА: тёмный обсидиан с аметистово-плазменным свечением
+		hull_c = Color(0.13, 0.08, 0.24)
+		dark_c = Color(0.05, 0.03, 0.11)
+		cock_c = Color(0.88, 0.34, 1.0, 0.95)
+		neon_c = Color(0.84, 0.32, 1.0)
+		flame_c = Color(0.82, 0.28, 1.0, 1.0)
+		tail_c = Color(0.24, 0.92, 1.0, 1.0)
+
+	_hull_neon_color = neon_c
+	_hull_flame_color = flame_c
+	_hull_tail_color = tail_c
+
+	if _mat_hull != null:
+		_mat_hull.albedo_color = hull_c
+	if _mat_dark_armor != null:
+		_mat_dark_armor.albedo_color = dark_c
+	if _mat_cockpit != null:
+		_mat_cockpit.albedo_color = cock_c
+		_mat_cockpit.emission = Color(cock_c.r, cock_c.g, cock_c.b)
+	if _mat_burner != null:
+		_mat_burner.albedo_color = neon_c.lightened(0.45)
+	if _wing_strip_mat != null:
+		_wing_strip_mat.albedo_color = neon_c
 
 
 func set_dynamic_lights_enabled(enabled: bool) -> void:
@@ -583,8 +646,8 @@ func update_glider(
 			_jet_mat.set_shader_parameter("flame_color", Color(0.25, 1.0, 0.72, 1.0))
 			_jet_mat.set_shader_parameter("tail_color", Color(0.96, 0.25, 0.92, 1.0))
 		else:
-			_jet_mat.set_shader_parameter("flame_color", Color(0.12, 0.86, 1.0, 1.0))
-			_jet_mat.set_shader_parameter("tail_color", Color(0.55, 0.18, 0.98, 1.0))
+			_jet_mat.set_shader_parameter("flame_color", _hull_flame_color)
+			_jet_mat.set_shader_parameter("tail_color", _hull_tail_color)
 
 	if _jet_left != null and _jet_right != null:
 		var jet_len_scale: float = lerpf(0.95, 1.55, clampf((thrust_lvl - 1.0) * 0.9, 0.0, 1.0))
@@ -595,7 +658,7 @@ func update_glider(
 
 	if _engine_light != null:
 		_engine_light.light_energy = 2.2 * thrust_lvl
-		_engine_light.light_color = Color(0.32, 1.0, 0.82) if (is_hyper or is_tunnel) else Color(0.20, 0.90, 1.0)
+		_engine_light.light_color = Color(0.32, 1.0, 0.82) if (is_hyper or is_tunnel) else _hull_neon_color
 
 	if _muzzle_flash_energy > 0.0:
 		_muzzle_flash_energy = maxf(0.0, _muzzle_flash_energy - delta * 14.0)
@@ -610,7 +673,7 @@ func update_glider(
 		elif is_overdrive:
 			_wing_strip_mat.albedo_color = Color(1.0, 0.85, 0.24)
 		else:
-			_wing_strip_mat.albedo_color = Color(0.22, 0.95, 1.0)
+			_wing_strip_mat.albedo_color = _hull_neon_color
 
 	# Обновляем френелевский купол 3D Грави-Щита (вспыхивает контурной волной при ударе, сборе щита или в Гипер-режиме)
 	if _shield_dome != null and _shield_shader_mat != null:
